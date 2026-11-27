@@ -4837,7 +4837,7 @@ dependencies = [
  "argon2",
  "cc",
  "ctr",
- "getrandom 0.2.17",
+ "getrandom 0.4.3",
  "notify",
  "serde",
  "serde_json",
