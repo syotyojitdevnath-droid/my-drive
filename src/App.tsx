@@ -100,7 +100,6 @@ function GuestRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   return !isAuthenticated ? <>{children}</> : <Navigate to="/drive/my-drive" replace />;
 }
-
 import { useTheme } from "./hooks/useTheme";
 import { useBranding } from "./hooks/useBranding";
 
@@ -110,7 +109,6 @@ function App() {
   useAppLockWatcher(); // Inactivity, blur, and Cmd+L hotkey watcher
   const [isRestoring, setIsRestoring] = useState(true);
   const [splashProgress, setSplashProgress] = useState(20);
-  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const { t } = useTranslation("drive");
   const [status, setStatus] = useState(() => t("splash.connecting"));
 
