@@ -1,0 +1,155 @@
+{
+  "logoAlt": "Logo TeleDrive",
+  "actions": {
+    "close": "Fermer"
+  },
+  "splash": {
+    "connecting": "Connexion à Telegram..."
+  },
+  "nav": {
+    "myDrive": "Mon Drive",
+    "recent": "Récents",
+    "starred": "Favoris",
+    "archived": "Archivés",
+    "trash": "Corbeille",
+    "backups": "Sauvegardes",
+    "settings": "Paramètres"
+  },
+  "header": {
+    "switchToLight": "Passer au thème clair",
+    "switchToDark": "Passer au thème sombre",
+    "settings": "Paramètres",
+    "searchPlaceholder": "Rechercher dans Drive"
+  },
+  "indexQueue": {
+    "saveFailedTitle": "Échec de l'enregistrement de l'index — cliquez pour réessayer",
+    "liveSyncTitle": "Synchronisation multi-appareils en direct",
+    "backupSnapshotTitle": "Capture de sauvegarde en cours",
+    "saveFailed": "Échec de l'enregistrement",
+    "retryingIn": "Nouvel essai dans {{seconds}}s",
+    "synced": "Synchronisé",
+    "backupInProgress": "Sauvegarde en cours",
+    "syncing": "Synchronisation",
+    "retry": "Réessayer"
+  },
+  "dropOverlay": {
+    "title": "Déposez des fichiers pour les téléverser sur Mon Drive",
+    "description": "Relâchez pour lancer immédiatement le téléversement"
+  },
+  "offlineBanner": "Vous êtes actuellement hors ligne. Certaines fonctionnalités peuvent être indisponibles.",
+  "shortcuts": {
+    "title": "Raccourcis clavier",
+    "navigationGroup": "Navigation et Recherche",
+    "focusSearch": "Cibler la recherche",
+    "focusSearchKeys": "/ ou {{modKey}}F",
+    "clearSelection": "Effacer la sélection / fermer la recherche",
+    "scrollToTop": "Défiler vers le haut",
+    "scrollToBottom": "Défiler vers le bas",
+    "showHelp": "Afficher l'aide des raccourcis",
+    "selectionGroup": "Actions sur la sélection",
+    "selectAll": "Tout sélectionner",
+    "moveToTrash": "Déplacer vers la corbeille",
+    "rename": "Renommer l'élément",
+    "download": "Télécharger le fichier"
+  },
+  "sidebar": {
+    "storage": "Stockage",
+    "usedOfUnlimited": "<strong>{{size}}</strong> utilisés sur Illimité",
+    "telegramCloudStorage": "Stockage Cloud Telegram"
+  },
+  "newMenu": {
+    "ariaLabel": "Nouvel élément",
+    "new": "Nouveau",
+    "newFolder": "Nouveau dossier",
+    "fileUpload": "Téléverser un fichier",
+    "folderUpload": "Téléverser un dossier"
+  },
+  "search": {
+    "placeholder": "Rechercher dans le Drive",
+    "matchingHeader": "Fichiers et dossiers correspondants",
+    "folder": "Dossier",
+    "fileIn": "Fichier • {{location}}",
+    "noResults": "Aucun fichier correspondant trouvé"
+  },
+  "upload": {
+    "failed_one": "{{count}} téléversement a échoué",
+    "failed_other": "{{count}} téléversements ont échoué",
+    "complete_one": "{{count}} téléversement terminé",
+    "complete_other": "{{count}} téléversements terminés",
+    "uploadingItems_one": "Téléversement de {{count}} élément ({{percent}}%)",
+    "uploadingItems_other": "Téléversement de {{count}} éléments ({{percent}}%)",
+    "expand": "Développer",
+    "collapse": "Réduire",
+    "close": "Fermer",
+    "queued": "En attente",
+    "uploading": "Téléversement...",
+    "retry": "Réessayer le téléversement",
+    "remove": "Retirer"
+  },
+  "backup": {
+    "scanning": "Analyse des dossiers…",
+    "backingUp": "Sauvegarde en cours — {{uploaded}} / {{total}}",
+    "completeUploaded_one": "Sauvegarde terminée — {{count}} fichier téléversé",
+    "completeUploaded_other": "Sauvegarde terminée — {{count}} fichiers téléversés",
+    "completeNothingChanged": "Sauvegarde terminée — aucun changement",
+    "cancelled": "Sauvegarde annulée",
+    "failed": "Sauvegarde échouée",
+    "retryRateLimit": "Nouvel essai {{attempt}}/{{maxAttempts}} — limite Telegram, attente de {{seconds}}s",
+    "retryNetwork": "Nouvel essai {{attempt}}/{{maxAttempts}} — problème réseau, attente de {{seconds}}s",
+    "readingFolders": "Lecture des dossiers depuis le disque",
+    "summaryUploaded_one": "{{count}} téléversé",
+    "summaryUploaded_other": "{{count}} téléversés",
+    "summaryUnchanged_one": "{{count}} inchangé",
+    "summaryUnchanged_other": "{{count}} inchangés",
+    "summaryFailed_one": "{{count}} échoué",
+    "summaryFailed_other": "{{count}} échoués",
+    "resumeAnytime": "Vous pouvez reprendre à tout moment.",
+    "dismiss": "Ignorer",
+    "partial": "Sauvegarde terminée avec des avertissements",
+    "summaryMissing_one": "{{count}} dossier non disponible",
+    "summaryMissing_other": "{{count}} dossiers non disponibles",
+    "cancel": "Annuler la sauvegarde",
+    "phase": {
+      "connecting": "Connexion à Telegram…",
+      "scanning": "Analyse des dossiers…",
+      "comparing": "Recherche des modifications…",
+      "saving": "Enregistrement du catalogue de sauvegarde…"
+    },
+    "comparingProgress": "{{processed}} fichiers vérifiés sur {{total}}",
+    "catalogRetry": "Telegram demande d'attendre : {{remaining}} avant la prochaine tentative du catalogue",
+    "fileTransfer": "Fichier en cours : {{percent}} % envoyé",
+    "waitingTelegram": "En attente de Telegram jusqu'à {{time}} (encore {{remaining}}). La sauvegarde reprendra d'elle-même.",
+    "summaryDeleted_one": "{{count}} supprimé du disque",
+    "summaryDeleted_other": "{{count}} supprimés du disque"
+  },
+  "errorBoundary": {
+    "title": "Un problème est survenu",
+    "description": "Une erreur inattendue s'est produite. Veuillez recharger l'application pour continuer.",
+    "reload": "Recharger l'application"
+  },
+  "notFound": {
+    "title": "404 - Page non trouvée",
+    "description": "La page que vous recherchez n'existe pas.",
+    "goToMyDrive": "Aller à Mon Drive"
+  },
+  "transfers": {
+    "active_one": "{{count}} transfert en cours",
+    "active_other": "{{count}} transferts en cours",
+    "complete_one": "{{count}} transfert terminé",
+    "complete_other": "{{count}} transferts terminés",
+    "failed_one": "{{count}} transfert échoué",
+    "failed_other": "{{count}} transferts échoués",
+    "downloads": "Téléchargements",
+    "uploads": "Téléversements",
+    "pause": "Pause",
+    "resume": "Reprendre",
+    "cancel": "Annuler le téléchargement",
+    "remove": "Supprimer",
+    "downloading": "Téléchargement en cours",
+    "paused": "En pause",
+    "done": "Téléchargé",
+    "cancelled": "Annulé",
+    "failedStatus": "Échec",
+    "retry": "Réessayer le téléchargement"
+  }
+}

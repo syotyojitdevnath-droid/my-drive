@@ -1,0 +1,24 @@
+{
+  "starPrompt": {
+    "title": "喜欢 TeleDrive 吗？ ✨",
+    "description": "如果 TeleDrive 为您节省了时间或存储成本，在 GitHub 上点亮一颗 ⭐ 可以让更多人发现它，并支持项目的持续发展。",
+    "starButton": "⭐ 在 GitHub 上点赞",
+    "maybeLater": "稍后再说",
+    "dontAskAgain": "不再提示"
+  },
+  "whatsNew": {
+    "title": "TeleDrive 最新动态",
+    "badge": "v{{version}}",
+    "features": [
+      "强化的多账号安全保险库 — 自动管理独立账号密钥与元数据隔离，保障多端稳定启动",
+      ">2/4 GB 断点续传与分片传输 — 支持上传断点恢复、自动分段及 SHA-256 秒传去重",
+      "极速冷启动与 3× 并发下载 — IndexedDB 本地快照缓存、Catalog v3 与并行 MTProto 拉取",
+      "全格式内置预览与网格缩略图 — 原生预览 DOCX、ODT、RTF、EPUB、XLSX/ODS、PPTX/ODP、ZIP/TAR、HTML 与 PDF/视频缩略图",
+      "多端协同与性能优化 — 更流畅的 Tauri v2 体验，完整覆盖 11 种语言"
+    ],
+    "starCta": "喜欢这次更新吗？给我们一颗 ⭐ 吧",
+    "starButton": "⭐ 在 GitHub 上点赞",
+    "close": "关闭",
+    "subtitle": "TeleDrive v0.1.4 更新亮点"
+  }
+}

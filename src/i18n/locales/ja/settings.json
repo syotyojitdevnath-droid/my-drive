@@ -1,0 +1,413 @@
+{
+  "page": {
+    "title": "設定",
+    "backToDrive": "ドライブに戻る"
+  },
+  "nav": {
+    "account": "電報アカウント",
+    "backup": "デバイスのバックアップ",
+    "appearance": "外観",
+    "language": "言語",
+    "storage": "ストレージ",
+    "about": "について",
+    "encryption": "暗号化",
+    "security": "Security & App Lock",
+    "general": "一般"
+  },
+  "language": {
+    "title": "言語",
+    "description": "TeleDrive インターフェース全体で使用する言語を選択します。",
+    "activeLanguage": "現在の言語",
+    "cardDescription": "好みの言語を選択してください。変更はすぐに適用されます。",
+    "callout": "<strong>即時同期:</strong> TeleDrive は言語設定をローカルに保存し、すべてのウィンドウに自動的に適用します。"
+  },
+  "logout": {
+    "button": "ログアウト",
+    "title": "ログアウト",
+    "description": "Telegram アカウントからサインアウトされます。ファイルはストレージ チャネルに安全に保管されます。",
+    "cancel": "キャンセル",
+    "confirm": "ログアウト",
+    "loggingOut": "ログアウト中…"
+  },
+  "account": {
+    "title": "電報アカウント",
+    "description": "接続された Telegram 認証情報とクラウド ストレージ チャネルを管理します。",
+    "notConnected": {
+      "title": "接続されていません",
+      "description": "Telegram アカウントに接続すると、プライベート ストレージ チャネルに無制限のファイルを保存できます。",
+      "connect": "テレグラムアカウントを接続する"
+    },
+    "activeSession": "アクティブなセッション",
+    "connectedVia": "Telegram MTProto クライアント経由で接続",
+    "disconnect": "アカウントの切断",
+    "channel": {
+      "title": "アクティブなストレージ チャネル",
+      "description": "ファイル、フォルダー、メタデータは、このプライベート チャネルに安全に保存されます。",
+      "name": "チャンネル名",
+      "id": "電報チャンネルID",
+      "loading": "読み込み中...",
+      "copyId": "チャンネルIDをコピー"
+    },
+    "syncing": "同期中...",
+    "syncNow": "今すぐ同期",
+    "switchChannel": "チャンネルを切り替える",
+    "architecture": "<strong>分散型クラウド ストレージ:</strong> ファイルはメッセージ ドキュメントとしてプライベート Telegram チャネルに直接アップロードされます。 TeleDrive は、このチャネルに固定されたインデックス付きマニフェストを維持するため、フォルダーとファイルは自動的に同期されます。",
+    "switchDialog": {
+      "title": "スイッチストレージチャネル",
+      "description": "TeleDrive ファイルに使用する別のプライベート Telegram チャネルを選択します。",
+      "warning": "<strong>警告:</strong> ストレージ チャネルを切り替えると、ローカル キャッシュがリセットされます。 TeleDrive は、選択したチャネルで既存のマニフェストを検索するか、新しいマニフェストを作成します。",
+      "cancel": "キャンセル",
+      "confirm": "確認する"
+    },
+    "toasts": {
+      "channelIdCopied": "チャンネル ID がクリップボードにコピーされました",
+      "syncSuccess": "ファイルは正常に同期されました。",
+      "alreadyUpToDate": "ドライブはすでに最新の状態になっています。",
+      "syncFailed": "同期に失敗しました",
+      "disconnected": "Telegram アカウントが正常に切断されました。",
+      "disconnectFailed": "アカウントの切断に失敗しました。",
+      "channelReset": "ストレージチャンネルがリセットされました。アプリを再起動して再マッピングします。",
+      "channelResetFailed": "ストレージチャネルのリセットに失敗しました。"
+    }
+  },
+  "backup": {
+    "title": "デバイスのバックアップ",
+    "description": "このコンピューター上のフォルダーを選択して、プライベート Telegram ストレージ チャネルに自動的にミラーリングします。",
+    "folders": {
+      "title": "ソースフォルダー",
+      "saving": "保存中…",
+      "description": "フォルダーはデバイスのバックアップ ルートの下にミラーリングされ、同期が保たれます。自動的に保存されます。",
+      "empty": "まだフォルダーは追加されていません。下の「フォルダーを追加」をクリックします。",
+      "add": "フォルダーの追加",
+      "pickerTitle": "バックアップするフォルダーを選択してください"
+    },
+    "excludes": {
+      "title": "パターンを除外する",
+      "description": "ソースフォルダーに相対的なグロブパターン。 <code>*</code>、<code>**</code>、および <code>?</code> をサポートします。例: <code>node_modules</code>、<code>*.tmp</code>。",
+      "empty": "除外はありません。ソースフォルダー内のすべてがバックアップされます。",
+      "placeholder": "例えば*.tmp または node_modules",
+      "add": "追加"
+    },
+    "remove": "{{item}}を削除",
+    "cadence": {
+      "title": "バックアップの頻度",
+      "active": "アクティブ",
+      "description": "TeleDrive がソース フォルダーを再スキャンする頻度。変更されたファイルのみが再アップロードされます。",
+      "off": "オフ",
+      "every6h": "6時間ごと",
+      "every12h": "12時間ごと",
+      "every24h": "24時間ごと",
+      "onChange": "ファイルが変更されたとき"
+    },
+    "lastBackup": "最後のバックアップ:",
+    "lastBackupAgo": "{{時間}}前",
+    "never": "一度もない",
+    "lastResult": {
+      "uploaded_one": "{{count}} 個アップロードされました、",
+      "uploaded_other": "{{count}} 個アップロードされました、",
+      "unchanged_one": "{{count}} は変更なし、",
+      "unchanged_other": "{{count}} は変更なし、",
+      "failed_one": "{{count}} 回失敗しました",
+      "failed_other": "{{count}} 回失敗しました",
+      "deleted_one": "{{count}} 件をディスクから削除",
+      "deleted_other": "{{count}} 件をディスクから削除"
+    },
+    "progressHint": "右下隅にある進行状況パネルを確認してください。",
+    "cancel": "キャンセル",
+    "running": "バックアップ中…",
+    "runNow": "今すぐバックアップを実行",
+    "howItWorks": "<strong>バックアップの仕組み:</strong> TeleDrive は選択したフォルダーを調べ、ローカル マニフェストと比較して、新しいファイルまたは変更されたファイルのみをアップロードします。",
+    "viewBackups": "バックアップの表示",
+    "toasts": {
+      "maxFolders_one": "最大で {{count}} 個のソース フォルダー。",
+      "maxFolders_other": "最大で {{count}} 個のソース フォルダー。",
+      "maxExcludes_one": "最大で {{count}} 個のパターンを除外します。",
+      "maxExcludes_other": "最大で {{count}} 個のパターンが除外されます。",
+      "pickerFailed": "フォルダーピッカーを開けませんでした",
+      "noFolders": "最初に少なくとも 1 つのソース フォルダーを選択します"
+    },
+    "lastAttempt": "最後の試行:",
+    "lastAttemptAgo": "{{time}} 前",
+    "runStatus": {
+      "success": "成功",
+      "partial": "警告付きで完了",
+      "failed": "失敗",
+      "cancelled": "キャンセルされました — 次回の実行時に再開します"
+    },
+    "missingRoots_one": "{{count}} 個のソースフォルダーが利用できません。他のフォルダーはバックアップされました。",
+    "missingRoots_other": "{{count}} 個のソースフォルダーが利用できません。他のフォルダーはバックアップされました。",
+    "editFolders": "フォルダーを編集",
+    "autoDelete": {
+      "title": "バックアップ後にディスクから削除",
+      "description": "バックアップのたびに、Telegram に安全に保存されたバックアップフォルダー内のファイルをこのコンピューターから削除します。対象は上に表示されたフォルダー内のファイルのみで、アップロード後に編集されたファイルは再びバックアップされるまで残ります。",
+      "activeWarning": "オン: バックアップ済みのファイルをこのコンピューターから削除しています。必要なときは TeleDrive から復元してください。",
+      "confirmTitle": "バックアップ済みのファイルをこのコンピューターから削除しますか？",
+      "confirmBody": "次回のバックアップから、これらのフォルダー内で Telegram に保存済みのファイルはすべてディスクから削除されます。TeleDrive では元に戻せません。残るコピーは Telegram 上のものだけになります。",
+      "confirm": "オンにして削除",
+      "cancel": "キャンセル"
+    },
+    "waitingTelegram": "{{time}} まで Telegram を待機中（残り {{remaining}}）。バックアップは自動で再開されます。",
+    "manifestCorrupt": "このデバイスのバックアップ記録が破損しているため、バックアップを一時停止しています。",
+    "rebuildManifest": "Telegram から再構築",
+    "rebuildManifestDone": "バックアップ記録を再構築しました。Telegram にあるファイルは再アップロードせずに再リンクされます。",
+    "rebuildManifestFailed": "バックアップ記録を再構築できませんでした。",
+    "watch": {
+      "error": "フォルダーの監視が機能していません。変更は定期スキャンで検出されます。",
+      "degraded_one": "{{count}} 個のフォルダーを監視できていません（存在しないかアクセスできません）。5 分ごとに再試行します。",
+      "degraded_other": "{{count}} 個のフォルダーを監視できていません（存在しないかアクセスできません）。5 分ごとに再試行します。",
+      "nextRetry": "一部のファイルが失敗しました。次の自動再試行は {{time}} です。"
+    }
+  },
+  "appearance": {
+    "title": "外観",
+    "description": "TeleDrive のレイアウトの外観とカラーテーマをカスタマイズします。",
+    "themeMode": {
+      "title": "テーマモード",
+      "description": "TeleDrive が明るい外観、暗い外観、またはシステムに適応した外観を使用するかどうかを選択します。"
+    },
+    "themes": {
+      "light": {
+        "label": "ライト",
+        "description": "Google ドライブ キャンバスを備えたクリーンでハイコントラストのライト テーマ"
+      },
+      "dark": {
+        "label": "暗い",
+        "description": "低照度環境向けに最適化された洗練されたダークテーマ"
+      },
+      "system": {
+        "label": "システム",
+        "description": "オペレーティング システムの外観と自動的に同期します"
+      }
+    },
+    "callout": "<strong>テーマの同期:</strong> TeleDrive は、明るい表面 (`#F8FAFD`) と暗い表面 (`#131314`) の両方で Google ドライブの厳選された HSL カラー トークンを使用し、高いコントラストを確保し、目の疲れを軽減します。"
+  },
+  "storage": {
+    "title": "ストレージ",
+    "description": "Telegram のクラウド ストレージ スペース、アクティブなファイル、ゴミ箱の保持を監視します。",
+    "totalUsed": "使用された合計ストレージ",
+    "calculating": "計算中…",
+    "ofUnlimited": "無制限の",
+    "unlimitedBadge": "無制限のクラウドストレージ",
+    "meterLabel": "電報チャネルストレージ (無制限)",
+    "stats": {
+      "files": "保存されるファイル",
+      "folders": "作成されたフォルダー",
+      "trash": "ゴミ箱内のアイテム"
+    },
+    "recalculating": "再計算中…",
+    "recalculate": "ストレージの再計算",
+    "info": {
+      "noLimit": "Telegram は、プライベート チャネルに保存されるデータの累積量に制限を課しません。",
+      "fileLimits": "個々のファイルの制限: 標準アカウントの場合は 1 ファイルあたり最大 <strong>2 GB</strong>、Telegram プレミアム加入者の場合は最大 <strong>4 GB</strong> です。"
+    },
+    "toasts": {
+      "channelNotInitialised": "ストレージ チャネルがまだ初期化されていません。",
+      "refreshed": "Telegram からストレージが更新されました。",
+      "refreshFailed": "ストレージデータの更新に失敗しました。",
+      "indexIncomplete": "完全なインデックスを確認できませんでした。キャッシュされたファイルは表示されますが変更は一時停止します。"
+    },
+    "indexSave": {
+      "saving": "更新されたファイルリストを Telegram に保存中…",
+      "retrying": "Telegram のレート制限中です。{{seconds}} 秒後に自動で再試行します。ファイルは安全です。"
+    },
+    "recovery": {
+      "button": "不足しているファイルを復元",
+      "title": "ファイルを復元",
+      "description": "以前のインデックススナップショットとチャンネル内のアップロード済みファイルをチェックして、不足しているファイルを検索します。",
+      "warning": "復元されたファイルは現在のドライブに追加されます（削除されるものはありません）。",
+      "scanning": "チャンネル履歴をスキャン中…",
+      "empty": "復元可能なファイルは見つかりませんでした。",
+      "epochUnknown": "日付不明",
+      "channelFiles": "チャンネル履歴で見つかったファイル",
+      "selectAll": "すべて選択",
+      "selectNone": "選択解除",
+      "selectedCount": "{{total}} 件中 {{selected}} 件選択",
+      "filesCount_one": "{{count}} 件のファイル",
+      "filesCount_other": "{{count}} 件のファイル",
+      "restore": "選択項目を追加 ({{count}})",
+      "restoring": "ファイルを追加中…",
+      "restored_one": "{{count}} 件のファイルをドライブに追加しました",
+      "restored_other": "{{count}} 件のファイルをドライブに追加しました",
+      "restoredPartial_one": "{{count}} 件のファイルを追加しました（{{skipped}} 件の不明メッセージをスキップ）",
+      "restoredPartial_other": "{{count}} 件のファイルを追加しました（{{skipped}} 件の不明メッセージをスキップ）",
+      "nothingNew": "追加する新しいファイルはありません — すでにドライブ内に存在します。",
+      "failed": "ファイルを復元できませんでした",
+      "cancel": "キャンセル",
+      "scanningHint": "ストレージチャンネル内の未インデックスファイルと過去のカタログスナップショットを検索しています…",
+      "rateLimited": "Telegram のレート制限に達しました — {{seconds}}秒後に再試行します…"
+    }
+  },
+  "about": {
+    "title": "テレドライブについて",
+    "description": "アプリケーション、アップデート、オープンソース プロジェクトの詳細をご覧ください。",
+    "logoAlt": "テレドライブのロゴ",
+    "tagline": "Telegram が支援する仮想クラウド ストレージ クライアント",
+    "summary": "TeleDrive は、Telegram を利用したオープンソースのクロスプラットフォームのクラウド ドライブ クライアントです。ファイル ストレージをプライベート Telegram チャネルにマッピングし、高速な検索、プレビュー、リアルタイム同期を備えた仮想階層ドライブにファイルを整理します。",
+    "starOnGithub": "GitHubでスターを付ける",
+    "githubRepository": "GitHub リポジトリ",
+    "reportIssue": "問題を報告する",
+    "watchDemo": "デモを見る",
+    "joinBeta": "ベータテストに参加する",
+    "website": "公式ウェブサイト",
+    "architecture": "チャネルベースのクラウドストレージアーキテクチャ",
+    "checkingUpdates": "アップデートをチェックしています...",
+    "checkUpdates": "アップデートをチェックする",
+    "disclaimer": {
+      "title": "免責事項",
+      "body": "TeleDrive は独立したオープンソース クライアント アプリケーションであり、Telegram FZ-LLC またはその関連会社と提携、認可、維持、スポンサー、または承認されていません。"
+    },
+    "toasts": {
+      "openLinkFailed": "リンクを開けませんでした。",
+      "upToDate": "最新情報を入手しました!",
+      "latestVersion": "TeleDrive v{{version}} が最新バージョンです。"
+    }
+  },
+  "encryption": {
+    "title": "ゼロ知識暗号化 (E2EE)",
+    "description": "デバイスから送信する前に AES-256-GCM でローカル暗号化します。",
+    "setupTitle": "暗号化パスフレーズを設定",
+    "setupHint": "TeleDrive がパスフレーズを外部に送信・保存することはありません。忘れないよう保管してください。",
+    "newPassphrasePlaceholder": "パスフレーズを作成（6文字以上）",
+    "confirmPassphrasePlaceholder": "パスフレーズを確認",
+    "passphrasePlaceholder": "暗号化パスフレーズを入力",
+    "encryptNewByDefault": "新規アップロードを自動的に暗号化する",
+    "rememberOnDevice": "このデバイスに鍵を安全に保存する",
+    "enableButton": "暗号化を有効化",
+    "statusUnlocked": "暗号化ボールト：ロック解除済み",
+    "statusLocked": "暗号化ボールト：ロック中",
+    "unlockedSubtitle": "暗号化ファイルはプレビューやダウンロード時にローカルで復号されます。",
+    "lockedSubtitle": "暗号化ファイルを開く・アップロードするにはパスフレーズを入力してください。",
+    "lockButton": "ボールトをロック",
+    "unlockButton": "解除",
+    "encryptNewTitle": "新規アップロードを暗号化",
+    "encryptNewHelp": "匿名ファイル名と AES-256-GCM 形式でアップロードされます。",
+    "rememberTitle": "このデバイスに鍵を保持",
+    "rememberHelp": "起動時に自動で暗号化ボールトを解除します。",
+    "on": "有効",
+    "off": "無効",
+    "disableButton": "暗号化設定を無効化",
+    "disableConfirm": "無効化",
+    "unlockDialog": {
+      "title": "暗号化ファイルのロック解除",
+      "description": "このファイルをローカルで復号するため、E2EE パスフレーズを入力してください。"
+    },
+    "disableDialog": {
+      "title": "ローカル暗号化設定を無効にしますか？",
+      "description": "Telegram 上の既存暗号化ファイルは暗号化されたまま残り、開く際に元のパスフレーズが必要になります。"
+    },
+    "errors": {
+      "tooShort": "パスフレーズは6文字以上で入力してください。",
+      "mismatch": "パスフレーズが一致しません。",
+      "wrongPassphrase": "パスフレーズが正しくありません。",
+      "setupFailed": "暗号化の設定に失敗しました。",
+      "unlockFailed": "ボールトを解除できませんでした。"
+    },
+    "toasts": {
+      "enabled": "ゼロ知識暗号化を有効にしました。",
+      "unlocked": "暗号化ボールトを解除しました。",
+      "locked": "暗号化ボールトをロックしました。",
+      "disabled": "ローカル暗号化設定をクリアしました。"
+    }
+  },
+  "security": {
+    "title": "Security & App Lock",
+    "description": "Protect TeleDrive on this device when you step away.",
+    "enableLock": "Enable App Lock",
+    "enableLockDesc": "Require authentication whenever TeleDrive is opened or idle.",
+    "methodHeader": "Unlock Method",
+    "methods": {
+      "biometricTitle": "Device Password & Biometrics",
+      "biometricDesc": "Unlock using Touch ID, Face ID, Windows Hello, or your computer login password. No new password to memorize.",
+      "biometricRecommended": "Recommended",
+      "customTitle": "Custom TeleDrive Passcode",
+      "customDesc": "Set a dedicated 4–6 digit numeric PIN or alphanumeric password specifically for TeleDrive.",
+      "changePasscode": "Change Passcode"
+    },
+    "cadenceHeader": "Locking Cadence",
+    "cadence": {
+      "title": "Auto-Lock Timeout",
+      "desc": "Automatically lock after a period of inactivity.",
+      "immediate": "Immediately when minimized",
+      "1m": "After 1 minute of inactivity",
+      "5m": "After 5 minutes of inactivity (Recommended)",
+      "15m": "After 15 minutes of inactivity",
+      "1h": "After 1 hour of inactivity",
+      "never": "Never (Only manual lock)"
+    },
+    "options": {
+      "lockOnMinimize": "Lock on Minimize",
+      "lockOnMinimizeDesc": "Lock immediately when the application window is minimized or hidden.",
+      "privacyShield": "Window Privacy Shield",
+      "privacyShieldDesc": "Obfuscate content preview in Mission Control, Alt-Tab, and mobile recents."
+    },
+    "shortcutHint": "Tip: You can quickly lock TeleDrive at any time by pressing Cmd+L (macOS) or Ctrl+L (Windows/Linux).",
+    "toasts": {
+      "enabled": "App lock enabled!",
+      "disabled": "App lock disabled.",
+      "switchedBio": "Using device credentials & biometrics.",
+      "passcodeSaved": "App lock passcode updated successfully!"
+    },
+    "dialog": {
+      "setTitle": "Set App Lock Passcode",
+      "changeTitle": "Change Passcode",
+      "pinHint": "Enter a 4-to-6 digit numeric PIN.",
+      "passphraseHint": "Enter a master passphrase.",
+      "currentPass": "Current Passcode",
+      "newPass": "New Passcode",
+      "confirmPass": "Confirm New Passcode",
+      "cancel": "Cancel",
+      "save": "Save Passcode"
+    },
+    "errors": {
+      "wrongCurrentPass": "Current passcode is incorrect.",
+      "pinFormat": "PIN must be between 4 and 6 digits.",
+      "passphraseLength": "Passphrase must be at least 6 characters.",
+      "mismatch": "Passcodes do not match.",
+      "saveFailed": "Failed to save new passcode."
+    },
+    "lockScreen": {
+      "title": "TeleDrive is Locked",
+      "lockedBadge": "Locked",
+      "touchId": "Unlock with Touch ID",
+      "faceId": "Unlock with Face ID",
+      "windowsHello": "Unlock with Windows Hello",
+      "deviceCreds": "Unlock with Device Password",
+      "biometricHint": "Touch your fingerprint sensor or enter your device password.",
+      "enterPassphrase": "Enter master passphrase",
+      "unlockBtn": "Unlock",
+      "wrongPin": "Incorrect PIN. Please try again.",
+      "wrongPasscode": "Incorrect passcode. Please try again.",
+      "cooldown": "Too many failed attempts. Try again in {{seconds}}s.",
+      "forgot": "Forgot passcode?",
+      "forgotTitle": "Forgot Your Passcode?",
+      "forgotDescription": "To protect your privacy, TeleDrive cannot recover a forgotten passcode. Resetting it will sign you out of this device and remove the lock. All your files and backups remain completely safe and untouched in your Telegram cloud.",
+      "cancel": "Cancel",
+      "resetAndLogout": "Sign Out & Reset Lock"
+    }
+  },
+  "general": {
+    "title": "一般",
+    "description": "PC 起動時の動作とシステムトレイでのバックグラウンド動作を設定します。",
+    "startup": {
+      "title": "起動とシステムトレイ",
+      "description": "ログイン時の自動起動とトレイ最小化起動を個別に設定できます。",
+      "launchAtLogin": {
+        "title": "ログイン時に起動",
+        "description": "サインイン時に TeleDrive を自動で起動し、スケジュール済みバックアップとフォルダー同期を維持します。"
+      },
+      "startMinimized": {
+        "title": "トレイに最小化して起動",
+        "description": "起動時にメインウィンドウを開かず、システムトレイに格納した状態でバックグラウンド起動します。"
+      }
+    },
+    "callout": "<strong>バックグラウンドトレイ動作：</strong> サイレント起動時はメインウィンドウを表示せず、バックアップと同期を実行したままシステムトレイに常駐します。ウィンドウを開くにはトレイアイコンをクリックするか TeleDrive を再度起動してください。",
+    "toasts": {
+      "launchAtLoginEnabled": "ログイン時に TeleDrive が自動起動するよう設定しました。",
+      "launchAtLoginDisabled": "ログイン時の自動起動から TeleDrive を解除しました。",
+      "launchAtLoginFailed": "ログイン時起動の設定を更新できませんでした。",
+      "startMinimizedEnabled": "次回からシステムトレイに最小化して起動します。",
+      "startMinimizedDisabled": "次回から起動時にメインウィンドウを表示します。",
+      "startMinimizedFailed": "起動ウィンドウ設定を更新できませんでした。"
+    }
+  }
+}

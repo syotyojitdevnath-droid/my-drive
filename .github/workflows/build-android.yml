@@ -1,0 +1,155 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type (debug or release)'
+        required: false
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
+
+concurrency:
+  group: build-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      NDK_HOME: /usr/local/lib/android/sdk/ndk/27.1.12297006
+      GRADLE_OPTS: "-Dorg.gradle.internal.http.connectionTimeout=120000 -Dorg.gradle.internal.http.socketTimeout=120000"
+      JAVA_OPTS: "-Dorg.gradle.internal.http.connectionTimeout=120000 -Dorg.gradle.internal.http.socketTimeout=120000"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install Android NDK
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          if [ -d "$NDK_HOME" ] && [ -f "$NDK_HOME/source.properties" ]; then
+            echo "✓ Android NDK is already installed at $NDK_HOME"
+          else
+            echo "Installing Android NDK 27.1.12297006 with retries..."
+            for attempt in 1 2 3; do
+              echo "Attempt $attempt of 3..."
+              if $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.1.12297006"; then
+                echo "✓ Android NDK installed successfully"
+                break
+              fi
+              echo "⚠ NDK install failed on attempt $attempt, cleaning temporary files and retrying in 10s..."
+              rm -rf "$ANDROID_HOME/.temp" "$ANDROID_HOME/ndk/27.1.12297006" 2>/dev/null || true
+              sleep 10
+            done
+          fi
+          test -d "$NDK_HOME"
+
+      - name: Install npm dependencies
+        run: npm ci
+        working-directory: .
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Initialize Android project
+        run: npm run tauri android init -- --ci --skip-targets-install
+
+      - name: Pre-download and verify Gradle wrapper
+        run: |
+          DIST_DIR="$HOME/.gradle/wrapper/dists/gradle-8.14.3-bin/cv11ve7ro1n3o1j4so8xd9n66"
+          mkdir -p "$DIST_DIR"
+          if [ ! -f "$DIST_DIR/gradle-8.14.3-bin.zip.ok" ]; then
+            echo "Pre-fetching Gradle 8.14.3 distribution..."
+            curl -fL --retry 5 --retry-delay 3 --connect-timeout 30 \
+              -o "$DIST_DIR/gradle-8.14.3-bin.zip" \
+              https://services.gradle.org/distributions/gradle-8.14.3-bin.zip
+          fi
+          cd src-tauri/gen/android
+          chmod +x gradlew
+          ./gradlew --version
+
+      - name: Build Android APK
+        run: |
+          BUILD_TYPE="${{ github.event.inputs.build_type }}"
+          if [ -z "$BUILD_TYPE" ]; then
+            BUILD_TYPE="release"
+          fi
+          if [ "$BUILD_TYPE" = "debug" ]; then
+            npx tauri android build --apk --ci --debug
+          else
+            npx tauri android build --apk --ci
+          fi
+
+      - name: Organize APK deliverables
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          mkdir -p "distribution/v${VERSION}"
+          mkdir -p release-dist/apk
+          for f in $(find src-tauri/gen/android/app/build/outputs/apk -type f -name "*.apk"); do
+            fname=$(basename "$f")
+            echo "Found APK: $f ($fname)"
+            cp "$f" "release-dist/apk/$fname"
+            if [[ "$fname" == *"release"* ]]; then
+              cp "$f" "release-dist/apk/teledrive-v${VERSION}-universal-release.apk"
+              cp "$f" "distribution/v${VERSION}/teledrive.apk"
+              echo "✓ Staged distribution/v${VERSION}/teledrive.apk"
+            fi
+            if [[ "$fname" == *"debug"* ]]; then
+              cp "$f" "release-dist/apk/teledrive-v${VERSION}-universal-debug.apk"
+            fi
+          done
+          if [ ! -f "distribution/v${VERSION}/teledrive.apk" ]; then
+            FIRST_APK=$(find release-dist/apk -type f -name "*.apk" | head -n 1)
+            if [ -n "$FIRST_APK" ]; then
+              cp "$FIRST_APK" "distribution/v${VERSION}/teledrive.apk"
+              echo "✓ Staged $FIRST_APK as distribution/v${VERSION}/teledrive.apk"
+            else
+              echo "::error::No APK was generated"
+              exit 1
+            fi
+          fi
+          ls -lh release-dist/apk/
+
+      - name: Upload Android APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: teledrive-android-apk
+          path: |
+            release-dist/apk/*.apk
+            src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
+          if-no-files-found: warn
+          retention-days: 30
+

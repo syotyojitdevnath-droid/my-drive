@@ -1,0 +1,437 @@
+{
+  "page": {
+    "title": "Configuración",
+    "backToDrive": "Volver a Drive"
+  },
+  "nav": {
+    "account": "Cuenta de Telegram",
+    "backup": "Copia de seguridad del dispositivo",
+    "appearance": "Apariencia",
+    "language": "Idioma",
+    "storage": "Almacenamiento",
+    "about": "Acerca de",
+    "encryption": "Cifrado",
+    "security": "Seguridad y Bloqueo",
+    "general": "General"
+  },
+  "language": {
+    "title": "Idioma",
+    "description": "Elige el idioma utilizado en la interfaz, los menús y las notificaciones de TeleDrive.",
+    "activeLanguage": "Idioma activo",
+    "cardDescription": "Selecciona tu idioma preferido. Los cambios se aplican de inmediato en toda la aplicación.",
+    "callout": "<strong>Sincronización instantánea:</strong> TeleDrive conserva tu elección de idioma localmente y la aplica automáticamente en todas las ventanas y sesiones."
+  },
+  "logout": {
+    "button": "Cerrar sesión",
+    "title": "Cerrar sesión",
+    "description": "Se cerrará la sesión de tu cuenta de Telegram. Tus archivos permanecerán seguros en tu canal de almacenamiento.",
+    "cancel": "Cancelar",
+    "confirm": "Cerrar sesión",
+    "loggingOut": "Cerrando sesión…"
+  },
+  "account": {
+    "title": "Cuenta de Telegram",
+    "description": "Gestiona tus credenciales de Telegram conectadas y el canal de almacenamiento en la nube.",
+    "notConnected": {
+      "title": "No conectado",
+      "description": "Conecta tu cuenta de Telegram para comenzar a almacenar archivos ilimitados en tu canal de almacenamiento privado.",
+      "connect": "Conectar cuenta de Telegram"
+    },
+    "activeSession": "Sesión activa",
+    "connectedVia": "Conectado a través del cliente Telegram MTProto",
+    "disconnect": "Desconectar cuenta",
+    "channel": {
+      "title": "Canal de almacenamiento activo",
+      "description": "Tus archivos, carpetas y metadatos se guardan de forma segura en este canal privado.",
+      "name": "Nombre del canal",
+      "id": "ID del canal de Telegram",
+      "loading": "Cargando...",
+      "copyId": "Copiar ID del canal"
+    },
+    "syncing": "Sincronizando...",
+    "syncNow": "Sincronizar ahora",
+    "switchChannel": "Cambiar canal",
+    "architecture": "<strong>Almacenamiento en la nube descentralizado:</strong> tus archivos se cargan como documentos de mensajes directamente a tu canal privado de Telegram. TeleDrive mantiene un manifiesto indexado fijado en este canal para que tus carpetas y archivos permanezcan sincronizados automáticamente.",
+    "switchDialog": {
+      "title": "Cambiar canal de almacenamiento",
+      "description": "Selecciona un canal privado de Telegram diferente para usar para los archivos de TeleDrive.",
+      "warning": "<strong>Advertencia:</strong> cambiar el canal de almacenamiento restablece la caché local. TeleDrive buscará un manifiesto existente en el canal seleccionado o creará uno nuevo.",
+      "cancel": "Cancelar",
+      "confirm": "Confirmar"
+    },
+    "toasts": {
+      "channelIdCopied": "ID del canal copiado al portapapeles",
+      "syncSuccess": "¡Archivos sincronizados correctamente!",
+      "alreadyUpToDate": "Tu unidad ya está actualizada.",
+      "syncFailed": "Error de sincronización",
+      "disconnected": "Cuenta de Telegram desconectada con éxito.",
+      "disconnectFailed": "Error al desconectar la cuenta.",
+      "channelReset": "Canal de almacenamiento restablecido. Reinicia la aplicación para volver a asignarlo.",
+      "channelResetFailed": "Error al restablecer el canal de almacenamiento."
+    }
+  },
+  "backup": {
+    "title": "Copia de seguridad del dispositivo",
+    "description": "Elige carpetas en este ordenador para reflejarlas automáticamente en tu canal privado de almacenamiento de Telegram.",
+    "folders": {
+      "title": "Carpetas de origen",
+      "saving": "guardando…",
+      "description": "Las carpetas se reflejan en la raíz de copia de seguridad del dispositivo y se mantienen sincronizadas. Se guarda automáticamente.",
+      "empty": "Aún no se han añadido carpetas. Haz clic en “Añadir carpeta” a continuación.",
+      "add": "Añadir carpeta",
+      "enterManually": "Introducir ruta manualmente",
+      "pickerTitle": "Elige una carpeta para respaldar",
+      "dialog": {
+        "title": "Seleccionar carpeta de origen",
+        "description": "Elige una carpeta predeterminada en tu dispositivo o introduce una ruta manualmente.",
+        "presets": "Carpetas comunes del dispositivo",
+        "camera": "Cámara (DCIM)",
+        "downloads": "Descargas",
+        "pictures": "Imágenes",
+        "documents": "Documentos",
+        "music": "Música",
+        "movies": "Películas",
+        "whatsapp": "Multimedia de WhatsApp",
+        "telegram": "Descargas de Telegram",
+        "customPath": "Ruta de la carpeta",
+        "pathPlaceholder": "/storage/emulated/0/Download",
+        "add": "Añadir carpeta",
+        "cancel": "Cancelar",
+        "invalidPath": "Introduce una ruta de carpeta válida"
+      }
+    },
+    "excludes": {
+      "title": "Patrones de exclusión",
+      "description": "Patrones glob relativos a una carpeta de origen. Admite <code>*</code>, <code>**</code> y <code>?</code>. Ejemplos: <code>node_modules</code>, <code>*.tmp</code>.",
+      "empty": "Sin exclusiones. Se realizará una copia de seguridad de todo lo que esté en tus carpetas de origen.",
+      "placeholder": "ej. *.tmp o node_modules",
+      "add": "Añadir"
+    },
+    "remove": "Eliminar {{item}}",
+    "cadence": {
+      "title": "Frecuencia de copia de seguridad",
+      "active": "Activo",
+      "description": "Con qué frecuencia TeleDrive debe volver a examinar tus carpetas de origen. Solo se vuelven a cargar los archivos modificados.",
+      "off": "Desactivado",
+      "every6h": "Cada 6 horas",
+      "every12h": "Cada 12 horas",
+      "every24h": "Cada 24 horas",
+      "onChange": "Cuando cambien los archivos"
+    },
+    "lastBackup": "Última copia de seguridad:",
+    "lastBackupAgo": "hace {{time}}",
+    "never": "Nunca",
+    "lastResult": {
+      "uploaded_one": "{{count}} subido, ",
+      "uploaded_other": "{{count}} subidos, ",
+      "unchanged_one": "{{count}} sin cambios, ",
+      "unchanged_other": "{{count}} sin cambios, ",
+      "failed_one": "{{count}} fallido",
+      "failed_other": "{{count}} fallidos",
+      "uploaded_zero": "{{count}} subidos, ",
+      "unchanged_zero": "{{count}} sin cambios, ",
+      "failed_zero": "{{count}} fallidos",
+      "deleted_one": "{{count}} eliminado del disco",
+      "deleted_other": "{{count}} eliminados del disco"
+    },
+    "progressHint": "Sigue el progreso en el panel flotante de la esquina inferior derecha.",
+    "cancel": "Cancelar",
+    "running": "Respaldando…",
+    "runNow": "Respaldar ahora",
+    "howItWorks": "<strong>Cómo funciona la copia de seguridad:</strong> TeleDrive recorre las carpetas de origen seleccionadas, compara los cambios con un manifiesto local y solo carga los archivos que son nuevos o modificados.",
+    "viewBackups": "Ver copias de seguridad",
+    "toasts": {
+      "maxFolders_one": "Máximo {{count}} carpeta de origen.",
+      "maxFolders_other": "Máximo {{count}} carpetas de origen.",
+      "maxExcludes_one": "Máximo {{count}} patrón de exclusión.",
+      "maxExcludes_other": "Máximo {{count}} patrones de exclusión.",
+      "pickerFailed": "No se pudo abrir el selector de carpetas",
+      "noFolders": "Selecciona al menos una carpeta de origen primero",
+      "maxFolders_zero": "Máximo {{count}} carpetas de origen.",
+      "maxExcludes_zero": "Máximo {{count}} patrones de exclusión."
+    },
+    "lastAttempt": "Último intento:",
+    "lastAttemptAgo": "hace {{time}}",
+    "runStatus": {
+      "success": "Exitoso",
+      "partial": "Completado con advertencias",
+      "failed": "Fallido",
+      "cancelled": "Cancelado: se reanudará en la próxima ejecución"
+    },
+    "missingRoots_one": "{{count}} carpeta de origen no está disponible. Se respaldaron las demás carpetas.",
+    "missingRoots_other": "{{count}} carpetas de origen no están disponibles. Se respaldaron las demás carpetas.",
+    "editFolders": "Editar carpetas",
+    "autoDelete": {
+      "title": "Eliminar del disco tras el respaldo",
+      "description": "Después de cada respaldo, los archivos de tus carpetas de respaldo que ya están a salvo en Telegram se eliminan de este equipo. Solo se ven afectados los archivos de las carpetas indicadas arriba, y un archivo editado después de subirse se conserva hasta que se respalde de nuevo.",
+      "activeWarning": "Activado: los archivos respaldados se están eliminando de este equipo. Restáuralos desde TeleDrive cuando los necesites.",
+      "confirmTitle": "¿Eliminar de este equipo los archivos respaldados?",
+      "confirmBody": "A partir del próximo respaldo, todo archivo de estas carpetas que ya esté en Telegram se eliminará de tu disco. TeleDrive no puede deshacerlo: la única copia que quedará será la de Telegram.",
+      "confirm": "Activar y eliminar",
+      "cancel": "Cancelar"
+    },
+    "waitingTelegram": "Esperando a Telegram hasta las {{time}} (faltan {{remaining}}). El respaldo continuará solo.",
+    "manifestCorrupt": "El registro de respaldo de este dispositivo está dañado, por lo que los respaldos están en pausa.",
+    "rebuildManifest": "Reconstruir desde Telegram",
+    "rebuildManifestDone": "Registro reconstruido. Los archivos que ya están en Telegram se volverán a vincular sin subirse de nuevo.",
+    "rebuildManifestFailed": "No se pudo reconstruir el registro de respaldo.",
+    "watch": {
+      "error": "La supervisión de carpetas no funciona. Los cambios se detectarán en el análisis periódico.",
+      "degraded_one": "{{count}} carpeta no se está supervisando (falta o no es accesible). Se reintentará cada 5 minutos.",
+      "degraded_other": "{{count}} carpetas no se están supervisando (faltan o no son accesibles). Se reintentará cada 5 minutos.",
+      "nextRetry": "Algunos archivos fallaron. Próximo reintento automático a las {{time}}."
+    }
+  },
+  "appearance": {
+    "title": "Apariencia",
+    "description": "Personaliza el aspecto del diseño y el tema de color de TeleDrive.",
+    "themeMode": {
+      "title": "Modo de tema",
+      "description": "Elige si TeleDrive usa una apariencia clara, oscura o sigue el tema del sistema."
+    },
+    "themes": {
+      "light": {
+        "label": "Claro",
+        "description": "Tema claro limpio y de alto contraste con la superficie de Google Drive"
+      },
+      "dark": {
+        "label": "Oscuro",
+        "description": "Tema oscuro elegante optimizado para entornos de poca luz"
+      },
+      "system": {
+        "label": "Sistema",
+        "description": "Coincide automáticamente con la apariencia del tema de tu sistema operativo"
+      }
+    },
+    "callout": "<strong>Sincronización del tema:</strong> TeleDrive utiliza tokens de color HSL de Google Drive en superficies claras (`#F8FAFD`) y oscuras (`#131314`), lo que garantiza un contraste superior y una fatiga visual reducida."
+  },
+  "storage": {
+    "title": "Almacenamiento",
+    "description": "Supervisa tu espacio de almacenamiento en la nube de Telegram, los archivos activos y la papelera.",
+    "totalUsed": "Almacenamiento total utilizado",
+    "calculating": "Calculando…",
+    "ofUnlimited": "de Ilimitado",
+    "unlimitedBadge": "Almacenamiento ilimitado en la nube",
+    "meterLabel": "Almacenamiento del canal de Telegram (ilimitado)",
+    "stats": {
+      "files": "Archivos almacenados",
+      "folders": "Carpetas creadas",
+      "trash": "Elementos en la papelera"
+    },
+    "recalculating": "Recalculando…",
+    "recalculate": "Recalcular almacenamiento",
+    "info": {
+      "noLimit": "Telegram no impone límites al volumen total de datos almacenados en canales privados.",
+      "fileLimits": "Límites por archivo: hasta <strong>2 GB</strong> por archivo para cuentas gratuitas de Telegram y hasta <strong>4 GB</strong> para suscriptores de Telegram Premium."
+    },
+    "toasts": {
+      "channelNotInitialised": "El canal de almacenamiento aún no está inicializado.",
+      "refreshed": "Almacenamiento actualizado desde Telegram.",
+      "refreshFailed": "No se pudieron actualizar los datos de almacenamiento.",
+      "indexIncomplete": "No se pudo verificar un índice completo. Los archivos en caché se siguen mostrando; los cambios permanecen pausados."
+    },
+    "indexSave": {
+      "saving": "Guardando lista de archivos actualizada en Telegram…",
+      "retrying": "Telegram está limitando la tasa de guardado. Reintentando automáticamente en {{seconds}}s. Sus archivos están seguros."
+    },
+    "recovery": {
+      "button": "Restaurar archivos faltantes",
+      "title": "Recuperar archivos",
+      "description": "Encuentre archivos faltantes en su drive revisando instantáneas de índices anteriores y archivos subidos en su canal. Sus archivos actuales se mantienen exactamente como están.",
+      "warning": "Los archivos recuperados se agregan a su drive actual; no se elimina nada. Las instantáneas antiguas pueden incluir archivos que luego eliminó o renombró.",
+      "scanning": "Escaneando historial del canal…",
+      "empty": "No se encontraron archivos recuperables.",
+      "epochUnknown": "Fecha desconocida",
+      "channelFiles": "Archivos encontrados en el historial del canal",
+      "selectAll": "Seleccionar todo",
+      "selectNone": "Deseleccionar todo",
+      "selectedCount": "{{selected}} de {{total}} seleccionados",
+      "filesCount_one": "{{count}} archivo",
+      "filesCount_other": "{{count}} archivos",
+      "restore": "Agregar seleccionados ({{count}})",
+      "restoring": "Agregando archivos…",
+      "restored_one": "Se agregó {{count}} archivo a su drive",
+      "restored_other": "Se agregaron {{count}} archivos a su drive",
+      "restoredPartial_one": "Se agregó {{count}} archivo; se omitió {{skipped}} mensaje faltante",
+      "restoredPartial_other": "Se agregaron {{count}} archivos; se omitieron {{skipped}} mensajes faltantes",
+      "nothingNew": "Nada nuevo para agregar: esos archivos ya están en su drive.",
+      "failed": "No se pudieron restaurar los archivos",
+      "cancel": "Cancelar",
+      "scanningHint": "Buscando archivos sin indexar e instantáneas antiguas del catálogo en tu canal de almacenamiento…",
+      "rateLimited": "Límite de Telegram alcanzado: reintentando en {{seconds}}s…"
+    }
+  },
+  "about": {
+    "title": "Acerca de TeleDrive",
+    "description": "Obtén más información sobre la aplicación, las actualizaciones y el proyecto de código abierto.",
+    "logoAlt": "Logotipo de TeleDrive",
+    "tagline": "Cliente de almacenamiento en la nube virtual impulsado por Telegram",
+    "summary": "TeleDrive es un cliente de unidad en la nube multiplataforma y de código abierto impulsado por Telegram. Mapea tu almacenamiento de archivos a un canal privado de Telegram y organiza tus archivos en una unidad virtual jerárquica con búsqueda rápida, vista previa y sincronización en tiempo real.",
+    "starOnGithub": "Dar estrella en GitHub",
+    "githubRepository": "Repositorio de GitHub",
+    "reportIssue": "Informar de un problema",
+    "watchDemo": "Ver la demo",
+    "joinBeta": "Unirse a la beta",
+    "website": "Sitio web oficial",
+    "architecture": "Arquitectura de almacenamiento en la nube basada en canales",
+    "checkingUpdates": "Buscando actualizaciones...",
+    "checkUpdates": "Buscar actualizaciones",
+    "disclaimer": {
+      "title": "Descargo de responsabilidad",
+      "body": "TeleDrive es una aplicación cliente de código abierto independiente y no está afiliada, autorizada, mantenida, patrocinada ni respaldada por Telegram FZ-LLC ni ninguna de sus filiales."
+    },
+    "toasts": {
+      "openLinkFailed": "No se pudo abrir el enlace.",
+      "upToDate": "¡Estás actualizado!",
+      "latestVersion": "TeleDrive v{{version}} es la última versión disponible."
+    }
+  },
+  "encryption": {
+    "title": "Cifrado de Conocimiento Cero (E2EE)",
+    "description": "Cifra archivos localmente con AES-256-GCM antes de salir de tu dispositivo. Serán ilegibles en Telegram.",
+    "setupTitle": "Configura tu frase de cifrado",
+    "setupHint": "TeleDrive nunca envía ni guarda tu frase en servidores. Guárdala bien: no se puede recuperar si se pierde.",
+    "newPassphrasePlaceholder": "Crear frase secreta (mín. 6 caracteres)",
+    "confirmPassphrasePlaceholder": "Confirmar frase secreta",
+    "passphrasePlaceholder": "Introduce tu frase de cifrado",
+    "encryptNewByDefault": "Cifrar automáticamente los nuevos archivos subidos",
+    "rememberOnDevice": "Recordar clave de forma segura en este dispositivo",
+    "enableButton": "Activar Cifrado",
+    "statusUnlocked": "Bóveda de cifrado desbloqueada",
+    "statusLocked": "Bóveda de cifrado bloqueada",
+    "unlockedSubtitle": "Los archivos cifrados se descifran automáticamente al previsualizar o descargar.",
+    "lockedSubtitle": "Introduce tu frase para desbloquear o subir archivos cifrados.",
+    "lockButton": "Bloquear bóveda",
+    "unlockButton": "Desbloquear",
+    "encryptNewTitle": "Cifrar nuevas subidas",
+    "encryptNewHelp": "Los archivos nuevos se suben con AES-256-GCM y nombre anónimo en el canal.",
+    "rememberTitle": "Recordar clave en este dispositivo",
+    "rememberHelp": "Desbloquea automáticamente tu bóveda al abrir TeleDrive.",
+    "on": "Activado",
+    "off": "Desactivado",
+    "disableButton": "Desactivar configuración de cifrado",
+    "disableConfirm": "Desactivar",
+    "unlockDialog": {
+      "title": "Desbloquear archivos cifrados",
+      "description": "Introduce tu frase E2EE para descifrar este archivo localmente."
+    },
+    "disableDialog": {
+      "title": "¿Desactivar la bóveda de cifrado local?",
+      "description": "Los archivos ya cifrados en Telegram seguirán cifrados y pedirán tu frase original al abrirlos."
+    },
+    "errors": {
+      "tooShort": "La frase debe tener al menos 6 caracteres.",
+      "mismatch": "Las frases no coinciden.",
+      "wrongPassphrase": "Frase incorrecta. Inténtalo de nuevo.",
+      "setupFailed": "Error al configurar el cifrado.",
+      "unlockFailed": "No se pudo desbloquear la bóveda."
+    },
+    "toasts": {
+      "enabled": "Cifrado E2EE activado para nuevas subidas.",
+      "unlocked": "Bóveda de cifrado desbloqueada.",
+      "locked": "Bóveda de cifrado bloqueada.",
+      "disabled": "Configuración de cifrado local eliminada."
+    }
+  },
+  "security": {
+    "title": "Seguridad y Bloqueo",
+    "description": "Protege TeleDrive en este dispositivo cuando te ausentes.",
+    "enableLock": "Activar bloqueo de aplicación",
+    "enableLockDesc": "Exigir autenticación al abrir TeleDrive o tras inactividad.",
+    "methodHeader": "Método de Desbloqueo",
+    "methods": {
+      "biometricTitle": "Contraseña y Biometría del Dispositivo",
+      "biometricDesc": "Desbloquea usando Touch ID, Face ID, Windows Hello o tu contraseña del sistema.",
+      "biometricRecommended": "Recomendado",
+      "customTitle": "Código personalizado de TeleDrive",
+      "customDesc": "Define un PIN de 4-6 dígitos o contraseña maestra exclusiva para TeleDrive.",
+      "changePasscode": "Cambiar código"
+    },
+    "cadenceHeader": "Frecuencia de Bloqueo",
+    "cadence": {
+      "title": "Tiempo de bloqueo automático",
+      "desc": "Bloquear automáticamente tras un periodo de inactividad.",
+      "immediate": "Inmediatamente al minimizar",
+      "1m": "Tras 1 minuto de inactividad",
+      "5m": "Tras 5 minutos de inactividad (Recomendado)",
+      "15m": "Tras 15 minutos de inactividad",
+      "1h": "Tras 1 hora de inactividad",
+      "never": "Nunca (Solo bloqueo manual)"
+    },
+    "options": {
+      "lockOnMinimize": "Bloquear al minimizar",
+      "lockOnMinimizeDesc": "Bloquea de inmediato cuando la ventana se minimiza u oculta.",
+      "privacyShield": "Escudo de privacidad de ventana",
+      "privacyShieldDesc": "Oculta el contenido en Mission Control, Alt-Tab y aplicaciones recientes."
+    },
+    "shortcutHint": "Consejo: Puedes bloquear TeleDrive pulsando Cmd+L (macOS) o Ctrl+L (Windows/Linux).",
+    "toasts": {
+      "enabled": "¡Bloqueo de app activado!",
+      "disabled": "Bloqueo de app desactivado.",
+      "switchedBio": "Usando credenciales del dispositivo y biometría.",
+      "passcodeSaved": "¡Código de acceso actualizado con éxito!"
+    },
+    "dialog": {
+      "setTitle": "Establecer código de bloqueo",
+      "changeTitle": "Cambiar código de acceso",
+      "pinHint": "Introduce un PIN numérico de 4 a 6 dígitos.",
+      "passphraseHint": "Introduce una contraseña maestra.",
+      "currentPass": "Código actual",
+      "newPass": "Nuevo código",
+      "confirmPass": "Confirmar nuevo código",
+      "cancel": "Cancelar",
+      "save": "Guardar código"
+    },
+    "errors": {
+      "wrongCurrentPass": "El código actual es incorrecto.",
+      "pinFormat": "El PIN debe tener entre 4 y 6 dígitos.",
+      "passphraseLength": "La contraseña debe tener al menos 6 caracteres.",
+      "mismatch": "Los códigos no coinciden.",
+      "saveFailed": "Error al guardar el nuevo código."
+    },
+    "lockScreen": {
+      "title": "TeleDrive está bloqueado",
+      "lockedBadge": "Bloqueado",
+      "touchId": "Desbloquear con Touch ID",
+      "faceId": "Desbloquear con Face ID",
+      "windowsHello": "Desbloquear con Windows Hello",
+      "deviceCreds": "Desbloquear con contraseña del dispositivo",
+      "biometricHint": "Toca tu sensor de huella o escribe tu contraseña del equipo.",
+      "enterPassphrase": "Introduce la contraseña maestra",
+      "unlockBtn": "Desbloquear",
+      "wrongPin": "PIN incorrecto. Inténtalo de nuevo.",
+      "wrongPasscode": "Contraseña incorrecta. Inténtalo de nuevo.",
+      "cooldown": "Demasiados intentos fallidos. Vuelve a intentarlo en {{seconds}}s.",
+      "forgot": "¿Olvidaste tu código?",
+      "forgotTitle": "¿Olvidaste tu código de acceso?",
+      "forgotDescription": "Por tu privacidad, TeleDrive no puede recuperar contraseñas olvidadas. Restablecerla cerrará la sesión en este dispositivo y quitará el bloqueo. Tus archivos permanecerán intactos en tu Telegram.",
+      "cancel": "Cancelar",
+      "resetAndLogout": "Cerrar sesión y restablecer bloqueo"
+    }
+  },
+  "general": {
+    "title": "General",
+    "description": "Configura cómo se inicia TeleDrive con tu equipo y cómo funciona en la bandeja del sistema.",
+    "startup": {
+      "title": "Inicio y bandeja del sistema",
+      "description": "Controla de forma independiente el inicio automático y la ejecución silenciosa en segundo plano.",
+      "launchAtLogin": {
+        "title": "Iniciar al arrancar el sistema",
+        "description": "Abre TeleDrive automáticamente al iniciar sesión para mantener activas las copias de seguridad programadas y la sincronización."
+      },
+      "startMinimized": {
+        "title": "Iniciar minimizado en la bandeja",
+        "description": "Mantiene la ventana principal oculta en la bandeja del sistema al iniciar TeleDrive para no interrumpir tu escritorio."
+      }
+    },
+    "callout": "<strong>Funcionamiento en la bandeja:</strong> Cuando TeleDrive se inicia de forma silenciosa, permanece activo en la bandeja con las copias de seguridad y la sincronización activas. Haz clic en el icono de la bandeja o vuelve a abrir TeleDrive para mostrar la ventana.",
+    "toasts": {
+      "launchAtLoginEnabled": "TeleDrive se iniciará automáticamente al iniciar sesión.",
+      "launchAtLoginDisabled": "Se eliminó TeleDrive del inicio del sistema.",
+      "launchAtLoginFailed": "No se pudo actualizar el inicio automático.",
+      "startMinimizedEnabled": "TeleDrive se iniciará minimizado en la bandeja del sistema.",
+      "startMinimizedDisabled": "TeleDrive abrirá la ventana principal al iniciarse.",
+      "startMinimizedFailed": "No se pudo actualizar la preferencia de ventana inicial."
+    }
+  }
+}

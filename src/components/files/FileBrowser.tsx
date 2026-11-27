@@ -1,0 +1,2513 @@
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { logger } from "@/lib/logger";
+import { createPortal } from "react-dom";
+import { Link, useNavigate } from "react-router-dom";
+import {
+  Grid,
+  List,
+  ChevronRight,
+  Home,
+  Star,
+  Trash2,
+  X,
+  Folder,
+  RotateCcw,
+  ArrowUpDown,
+  Eye,
+  Download,
+  Edit2,
+  CheckCircle,
+  Check,
+  Plus,
+  MoreHorizontal,
+  Shield,
+  AlertTriangle,
+  RefreshCw,
+  Calendar,
+  HardDrive,
+} from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useIsMobile } from "@/hooks/useIsMobile";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { cn, normalizeFolderPath } from "@/lib/utils";
+import { TeleFile } from "@/lib/types";
+import { useFileStore } from "@/stores/fileStore";
+import { useUIStore } from "@/stores/uiStore";
+import { useFileActions } from "@/hooks/useFileActions";
+import { FileIcon } from "./FileIcon";
+import { FolderIcon } from "./FolderIcon";
+import { FileContextMenu } from "./FileContextMenu";
+import { FileActionsMenu } from "./FileActionsMenu";
+import { FileInfoDialog } from "./FileInfoDialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  applySearchFilters,
+  fuzzySearch,
+  type DateRangeFilter,
+  type SizeRangeFilter,
+} from "@/lib/search/searchEngine";
+import { getFileCategory } from "@/lib/files/fileUtils";
+import { isEditableFile } from "@/lib/files/editableTypes";
+import {
+  getCachedThumbnailUrl,
+  invalidateThumbnailCache,
+  requestFileThumbnails,
+} from "@/lib/files/thumbnails";
+import { downloadSelectionAsZip } from "@/lib/telegram/zipDownloader";
+import { useFileBrowserDragAndDrop } from "@/hooks/useFileBrowserDragAndDrop";
+import { EmptyState } from "./EmptyState";
+import { collapseDuplicateFolders, dedupeByContentKey, dedupeByMessageId, folderIdForPath } from "@/lib/storage/metadataStore";
+import { isBackupItem, BACKUP_ROOT, BACKUP_ROOT_PREFIX } from "@/lib/backup/visibility";
+import { toast } from "sonner";
+import { Trans, useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
+import { retryIndexNow } from "@/lib/telegram/bootstrap";
+
+// ---------------------------------------------------------------------------
+// Utility: human-readable file size (fast arithmetic loop, avoids Math.log)
+// ---------------------------------------------------------------------------
+const FILE_SIZE_UNITS = ["B", "KB", "MB", "GB", "TB"] as const;
+
+export function formatFileSize(bytes: unknown): string {
+  const n = Number(bytes);
+  if (!n || !isFinite(n) || n <= 0) return "—";
+  if (n < 1024) return `${n} B`;
+  let i = 0;
+  let val = n;
+  while (val >= 1024 && i < 4) {
+    val /= 1024;
+    i++;
+  }
+  return `${val.toFixed(val >= 100 || i === 0 ? 0 : val >= 10 ? 1 : 2)} ${FILE_SIZE_UNITS[i]}`;
+}
+
+// ---------------------------------------------------------------------------
+// Utility: cached date formatting & string sorting collator
+// Reusing Intl instances eliminates thousands of heavy ICU engine initializations.
+// ---------------------------------------------------------------------------
+const shortDateFormatterCache = new Map<string, Intl.DateTimeFormat>();
+const fullDateFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+export function formatShortDate(timestamp: number, locale: string): string {
+  let fmt = shortDateFormatterCache.get(locale);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" });
+    shortDateFormatterCache.set(locale, fmt);
+  }
+  return fmt.format(timestamp);
+}
+
+export function formatFullDate(timestamp: number, locale: string): string {
+  let fmt = fullDateFormatterCache.get(locale);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat(locale);
+    fullDateFormatterCache.set(locale, fmt);
+  }
+  return fmt.format(timestamp);
+}
+
+const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+export function compareNames(a: string, b: string): number {
+  if (a === b) return 0;
+  return nameCollator.compare(a, b);
+}
+
+// ---------------------------------------------------------------------------
+// Utility: human-readable file type
+// ---------------------------------------------------------------------------
+function getFileType(file: TeleFile, t: TFunction<"files">): string {
+  const isDir = isDirectory(file);
+  if (isDir) return t("browser.fileType.folder");
+  
+  const ext = file.name.split(".").pop()?.toLowerCase();
+  switch (ext) {
+    case "pdf": return t("browser.fileType.pdf");
+    case "jpg":
+    case "jpeg":
+    case "png":
+    case "webp":
+    case "gif":
+    case "svg":
+      return t("browser.fileType.image");
+    case "mp4":
+    case "mkv":
+    case "mov":
+    case "avi":
+    case "webm":
+      return t("browser.fileType.video");
+    case "mp3":
+    case "wav":
+    case "m4a":
+    case "ogg":
+    case "flac":
+      return t("browser.fileType.audio");
+    case "txt":
+    case "md":
+    case "rtf":
+      return t("browser.fileType.text");
+    case "zip":
+    case "tar":
+    case "gz":
+    case "rar":
+    case "7z":
+      return t("browser.fileType.archive");
+    case "doc":
+    case "docx":
+      return t("browser.fileType.word");
+    case "xls":
+    case "xlsx":
+    case "csv":
+      return t("browser.fileType.spreadsheet");
+    case "ppt":
+    case "pptx":
+      return t("browser.fileType.presentation");
+    case "html":
+    case "css":
+    case "js":
+    case "ts":
+    case "tsx":
+    case "json":
+    case "py":
+    case "rs":
+    case "go":
+    case "c":
+    case "cpp":
+      return t("browser.fileType.sourceCode");
+    default:
+      return ext ? t("browser.fileType.generic", { ext: ext.toUpperCase() }) : t("browser.fileType.file");
+  }
+}
+
+function isDirectory(file: TeleFile): boolean {
+  return file.mime === "inode/directory" || file.mime === "application/x-directory";
+}
+
+// Stable empty array reference — used as a fallback for `indexedFiles` so
+// consumers (and React deps) see the SAME identity on every render instead
+// of allocating a fresh `[]` each time. Avoids spurious downstream re-runs.
+const EMPTY_FILES: readonly TeleFile[] = Object.freeze([]) as readonly TeleFile[];
+
+// ---------------------------------------------------------------------------
+// Memoized Item Components: FolderGridCard, FileGridCard, FileListRow
+// ---------------------------------------------------------------------------
+
+interface FolderGridCardProps {
+  folder: TeleFile;
+  index: number;
+  isSelected: boolean;
+  isBeingDragged: boolean;
+  isDragOver: boolean;
+  isDraggingActive: boolean;
+  isMobile: boolean;
+  onItemClick: (e: React.MouseEvent, file: TeleFile) => void;
+  onItemDoubleClick: (file: TeleFile) => void;
+  onPointerDown: (e: React.MouseEvent, file: TeleFile, variant: "folder-grid") => void;
+  onTouchStartItem: (file: TeleFile) => void;
+  onTouchEndItem: () => void;
+  onPreview: (file: TeleFile) => void;
+  onEdit: (file: TeleFile) => void;
+  onDownload: (file: TeleFile) => void;
+  onRename: (file: TeleFile) => void;
+  onStarToggle: (file: TeleFile) => void;
+  onTrash: (file: TeleFile) => void;
+  onDeletePermanently: (file: TeleFile) => void;
+  onArchive: (file: TeleFile) => void;
+  onUnarchive: (file: TeleFile) => void;
+  onGetInfo: (file: TeleFile) => void;
+}
+
+const FolderGridCard = React.memo(function FolderGridCard({
+  folder,
+  index,
+  isSelected,
+  isBeingDragged,
+  isDragOver,
+  isDraggingActive,
+  isMobile,
+  onItemClick,
+  onItemDoubleClick,
+  onPointerDown,
+  onTouchStartItem,
+  onTouchEndItem,
+  onPreview,
+  onEdit,
+  onDownload,
+  onRename,
+  onStarToggle,
+  onTrash,
+  onDeletePermanently,
+  onArchive,
+  onUnarchive,
+  onGetInfo,
+}: FolderGridCardProps) {
+  return (
+    <FileContextMenu
+      file={folder}
+      onPreview={onPreview}
+      onEdit={onEdit}
+      onDownload={onDownload}
+      onRename={onRename}
+      onStarToggle={onStarToggle}
+      onTrash={onTrash}
+      onDeletePermanently={onDeletePermanently}
+      onArchive={onArchive}
+      onUnarchive={onUnarchive}
+      onGetInfo={onGetInfo}
+    >
+      <div
+        onClick={(e) => onItemClick(e, folder)}
+        onDoubleClick={() => onItemDoubleClick(folder)}
+        onMouseDown={(e) => onPointerDown(e, folder, "folder-grid")}
+        onTouchStart={() => onTouchStartItem(folder)}
+        onTouchEnd={onTouchEndItem}
+        onTouchMove={onTouchEndItem}
+        data-folder-id={folder.id}
+        style={{ animationDelay: `${Math.min(index, 15) * 20}ms` }}
+        className={cn(
+          "group relative flex items-center justify-between gap-2 h-11 sm:h-12 px-2.5 sm:px-3.5 rounded-xl transition-all duration-150 cursor-pointer select-none border border-transparent hover:border-slate-300/80 dark:hover:border-white/[0.08]",
+          isSelected
+            ? "bg-[#c2e7ff] text-[#001d35] dark:bg-[#004a77] dark:text-[#c2e7ff] font-medium shadow-xs border-transparent"
+            : isDragOver
+            ? "bg-[#c2e7ff]/60 dark:bg-[#004a77]/60 ring-2 ring-[#0b57d0]"
+            : "bg-[#f0f4f9] dark:bg-[#161719] hover:bg-[#e1e7ef] dark:hover:bg-[#1f2124] text-[#1f1f1f] dark:text-[#e3e3e3]",
+          isBeingDragged && "opacity-40"
+        )}
+      >
+        {isDragOver && isDraggingActive && (
+          <span className="absolute -right-2 -top-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-[#0b57d0] text-white shadow-md ring-2 ring-white dark:ring-[#161719] pointer-events-none animate-folder-drop-badge">
+            <Plus className="h-3.5 w-3.5" />
+          </span>
+        )}
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1 pointer-events-none">
+          <FolderIcon
+            size="sm"
+            className={cn(
+              "h-4.5 w-4.5 sm:h-5 sm:w-5 shrink-0 transition-transform duration-200 group-hover:scale-105",
+              isSelected
+                ? "text-[#001d35] dark:text-[#c2e7ff]"
+                : "text-[#444746] dark:text-[#c4c7c5]"
+            )}
+          />
+          <span className="text-xs sm:text-sm font-medium truncate">
+            {folder.name}
+          </span>
+        </div>
+        <div
+          className={cn(
+            "shrink-0 ml-auto transition-opacity",
+            isMobile ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+          )}
+          data-no-drag
+          onClick={(e) => e.stopPropagation()}
+        >
+          <FileActionsMenu
+            file={folder}
+            onPreview={onPreview}
+            onEdit={onEdit}
+            onDownload={onDownload}
+            onRename={onRename}
+            onStarToggle={onStarToggle}
+            onTrash={onTrash}
+            onDeletePermanently={onDeletePermanently}
+            onArchive={onArchive}
+            onUnarchive={onUnarchive}
+            onGetInfo={onGetInfo}
+          />
+        </div>
+      </div>
+    </FileContextMenu>
+  );
+});
+
+interface FileGridCardProps {
+  file: TeleFile;
+  index: number;
+  foldersCount: number;
+  isSelected: boolean;
+  isBeingDragged: boolean;
+  isMobile: boolean;
+  thumbSrc: string | undefined;
+  formattedSize: string;
+  formattedDate: string;
+  onItemClick: (e: React.MouseEvent, file: TeleFile) => void;
+  onItemDoubleClick: (file: TeleFile) => void;
+  onPointerDown: (e: React.MouseEvent, file: TeleFile, variant: "file-grid") => void;
+  onTouchStartItem: (file: TeleFile) => void;
+  onTouchEndItem: () => void;
+  onThumbError: (file: TeleFile, badSrc: string) => void;
+  onPreview: (file: TeleFile) => void;
+  onOpenInSystemApp?: (file: TeleFile) => void;
+  onEdit: (file: TeleFile) => void;
+  onDownload: (file: TeleFile) => void;
+  onRename: (file: TeleFile) => void;
+  onStarToggle: (file: TeleFile) => void;
+  onTrash: (file: TeleFile) => void;
+  onDeletePermanently: (file: TeleFile) => void;
+  onArchive: (file: TeleFile) => void;
+  onUnarchive: (file: TeleFile) => void;
+  onOfflineToggle?: (file: TeleFile) => void;
+  onGetInfo: (file: TeleFile) => void;
+}
+
+const FileGridCard = React.memo(function FileGridCard({
+  file,
+  index,
+  foldersCount,
+  isSelected,
+  isBeingDragged,
+  isMobile,
+  thumbSrc,
+  formattedSize,
+  formattedDate,
+  onItemClick,
+  onItemDoubleClick,
+  onPointerDown,
+  onTouchStartItem,
+  onTouchEndItem,
+  onThumbError,
+  onPreview,
+  onOpenInSystemApp,
+  onEdit,
+  onDownload,
+  onRename,
+  onStarToggle,
+  onTrash,
+  onDeletePermanently,
+  onArchive,
+  onUnarchive,
+  onOfflineToggle,
+  onGetInfo,
+}: FileGridCardProps) {
+  return (
+    <FileContextMenu
+      file={file}
+      onPreview={onPreview}
+      onOpenInSystemApp={onOpenInSystemApp}
+      onEdit={onEdit}
+      onDownload={onDownload}
+      onRename={onRename}
+      onStarToggle={onStarToggle}
+      onTrash={onTrash}
+      onDeletePermanently={onDeletePermanently}
+      onArchive={onArchive}
+      onUnarchive={onUnarchive}
+      onOfflineToggle={onOfflineToggle}
+      onGetInfo={onGetInfo}
+    >
+      <div
+        onClick={(e) => onItemClick(e, file)}
+        onDoubleClick={() => onItemDoubleClick(file)}
+        onMouseDown={(e) => onPointerDown(e, file, "file-grid")}
+        onTouchStart={() => onTouchStartItem(file)}
+        onTouchEnd={onTouchEndItem}
+        onTouchMove={onTouchEndItem}
+        style={{ animationDelay: `${Math.min(foldersCount + index, 15) * 20}ms` }}
+        className={cn(
+          "group relative flex flex-col rounded-2xl transition-all duration-150 cursor-pointer overflow-hidden text-left select-none h-38 sm:h-48 md:h-52 bg-white dark:bg-[#111214] hover:bg-[#f8fafd] dark:hover:bg-[#161719] border border-slate-200/90 dark:border-white/[0.04] hover:border-slate-300 dark:hover:border-white/[0.08] hover:shadow-md [content-visibility:auto] [contain-intrinsic-size:auto_208px]",
+          isSelected
+            ? "bg-[#c2e7ff]/30 dark:bg-[#004a77]/30 ring-2 ring-[#0b57d0] dark:ring-[#a8c7fa] border-transparent shadow-xs"
+            : "",
+          isBeingDragged && "opacity-40"
+        )}
+      >
+        {/* Top bar with mini typed icon, title, and action menu */}
+        <div className="flex items-center justify-between gap-1.5 px-2.5 sm:px-3.5 pt-2 sm:pt-3 pb-1 shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1 pointer-events-none">
+            <FileIcon name={file.name} mime={file.mime} size="sm" bare className="shrink-0" />
+            <p className="text-[11px] sm:text-xs font-medium text-[#1f1f1f] dark:text-[#e3e3e3] truncate">
+              {file.name}
+            </p>
+          </div>
+          <div
+            className={cn(
+              "shrink-0 transition-opacity",
+              isMobile ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+            )}
+            data-no-drag
+            onClick={(e) => e.stopPropagation()}
+          >
+            <FileActionsMenu
+              file={file}
+              triggerClassName="h-7 w-7"
+              onPreview={onPreview}
+              onEdit={onEdit}
+              onDownload={onDownload}
+              onRename={onRename}
+              onStarToggle={onStarToggle}
+              onTrash={onTrash}
+              onDeletePermanently={onDeletePermanently}
+              onArchive={onArchive}
+              onUnarchive={onUnarchive}
+              onOfflineToggle={onOfflineToggle}
+              onGetInfo={onGetInfo}
+            />
+          </div>
+        </div>
+
+        {/* Centered Preview Canvas */}
+        <div className="flex-1 bg-[#f8fafd] dark:bg-[#0a0a0a] mx-2.5 my-1 rounded-xl border border-slate-100 dark:border-white/[0.04] flex items-center justify-center relative overflow-hidden pointer-events-none">
+          {thumbSrc ? (
+            <img
+              src={thumbSrc}
+              alt={file.name}
+              loading="lazy"
+              className="w-full h-full object-cover"
+              onError={() => onThumbError(file, thumbSrc)}
+            />
+          ) : (
+            <div className="w-16 h-20 bg-white dark:bg-[#161719] rounded-md shadow-xs border border-slate-200/80 dark:border-white/[0.04] p-2 flex flex-col items-center justify-between pointer-events-none select-none">
+              <div className="w-full space-y-1 mt-0.5 opacity-40">
+                <div className="h-0.5 bg-slate-300 dark:bg-slate-600 rounded-full w-full" />
+                <div className="h-0.5 bg-slate-300 dark:bg-slate-600 rounded-full w-4/5" />
+                <div className="h-0.5 bg-slate-300 dark:bg-slate-600 rounded-full w-3/5" />
+              </div>
+              <div className="my-auto py-0.5">
+                <FileIcon name={file.name} mime={file.mime} size="md" bare />
+              </div>
+              <div className="w-full space-y-1 mb-0.5 opacity-30">
+                <div className="h-0.5 bg-slate-300 dark:bg-slate-600 rounded-full w-full" />
+                <div className="h-0.5 bg-slate-300 dark:bg-slate-600 rounded-full w-2/3" />
+              </div>
+            </div>
+          )}
+
+          {file.starred && (
+            <Star className="absolute top-2 right-2 h-4 w-4 fill-amber-400 text-amber-400 drop-shadow-xs" />
+          )}
+          {file.offline && (
+            <CheckCircle className="absolute top-2 left-2 h-4 w-4 text-emerald-500 fill-emerald-500/20 shrink-0" />
+          )}
+        </div>
+
+        {/* Bottom details footer */}
+        <div className="px-3.5 py-2 flex items-center justify-between text-[11px] text-[#747775] dark:text-[#8e918f] pointer-events-none shrink-0 font-normal">
+          <span>{formattedSize}</span>
+          <span>{formattedDate}</span>
+        </div>
+      </div>
+    </FileContextMenu>
+  );
+});
+
+interface FileListRowProps {
+  file: TeleFile;
+  index: number;
+  isDir: boolean;
+  isSelected: boolean;
+  isBeingDragged: boolean;
+  isDragOver: boolean;
+  isMobile: boolean;
+  formattedSize: string;
+  formattedDateShort: string;
+  formattedDateFull: string;
+  fileTypeLabel: string;
+  onToggleSelect: (id: string) => void;
+  onItemClick: (e: React.MouseEvent, file: TeleFile) => void;
+  onItemDoubleClick: (file: TeleFile) => void;
+  onPointerDown: (e: React.MouseEvent, file: TeleFile, variant: "list-row") => void;
+  onTouchStartItem: (file: TeleFile) => void;
+  onTouchEndItem: () => void;
+  onPreview: (file: TeleFile) => void;
+  onOpenInSystemApp?: (file: TeleFile) => void;
+  onEdit: (file: TeleFile) => void;
+  onDownload: (file: TeleFile) => void;
+  onRename: (file: TeleFile) => void;
+  onStarToggle: (file: TeleFile) => void;
+  onTrash: (file: TeleFile) => void;
+  onDeletePermanently: (file: TeleFile) => void;
+  onArchive: (file: TeleFile) => void;
+  onUnarchive: (file: TeleFile) => void;
+  onOfflineToggle?: (file: TeleFile) => void;
+  onGetInfo: (file: TeleFile) => void;
+}
+
+const FileListRow = React.memo(function FileListRow({
+  file,
+  index,
+  isDir,
+  isSelected,
+  isBeingDragged,
+  isDragOver,
+  isMobile,
+  formattedSize,
+  formattedDateShort,
+  formattedDateFull,
+  fileTypeLabel,
+  onToggleSelect,
+  onItemClick,
+  onItemDoubleClick,
+  onPointerDown,
+  onTouchStartItem,
+  onTouchEndItem,
+  onPreview,
+  onOpenInSystemApp,
+  onEdit,
+  onDownload,
+  onRename,
+  onStarToggle,
+  onTrash,
+  onDeletePermanently,
+  onArchive,
+  onUnarchive,
+  onOfflineToggle,
+  onGetInfo,
+}: FileListRowProps) {
+  return (
+    <FileContextMenu
+      file={file}
+      onPreview={onPreview}
+      onOpenInSystemApp={onOpenInSystemApp}
+      onEdit={onEdit}
+      onDownload={onDownload}
+      onRename={onRename}
+      onStarToggle={onStarToggle}
+      onTrash={onTrash}
+      onDeletePermanently={onDeletePermanently}
+      onArchive={onArchive}
+      onUnarchive={onUnarchive}
+      onOfflineToggle={onOfflineToggle}
+      onGetInfo={onGetInfo}
+    >
+      <tr
+        onClick={(e) => onItemClick(e, file)}
+        onDoubleClick={() => onItemDoubleClick(file)}
+        onMouseDown={(e) => onPointerDown(e, file, "list-row")}
+        onTouchStart={() => onTouchStartItem(file)}
+        onTouchEnd={onTouchEndItem}
+        onTouchMove={onTouchEndItem}
+        {...(isDir ? { "data-folder-id": file.id } : {})}
+        style={{ animationDelay: `${Math.min(index, 15) * 20}ms` }}
+        className={cn(
+          "group border-b border-slate-100 dark:border-white/[0.03] hover:bg-[#f0f4f9] dark:hover:bg-[#161719] cursor-pointer transition-colors duration-100 h-11 sm:h-12 [content-visibility:auto] [contain-intrinsic-size:auto_48px]",
+          isSelected && "bg-[#c2e7ff]/40 dark:bg-[#004a77]/35 text-[#001d35] dark:text-[#c2e7ff]",
+          isDragOver && isDir && "bg-[#c2e7ff]/70 dark:bg-[#004a77]/70 ring-2 ring-[#0b57d0]",
+          isBeingDragged && "opacity-40"
+        )}
+      >
+        <td className="py-2 sm:py-3 px-3 sm:px-4 text-center" data-no-drag onClick={(e) => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => onToggleSelect(file.id)}
+            aria-label={file.name}
+            className="h-4 w-4 rounded-sm border-slate-300 dark:border-white/[0.1] text-[#0b57d0] focus:ring-[#0b57d0]/20 dark:bg-[#161719] transition-colors cursor-pointer"
+          />
+        </td>
+        <td className="py-2 sm:py-3 px-2.5 sm:px-4 font-medium text-[#1f1f1f] dark:text-[#e3e3e3] text-xs md:text-sm w-full sm:w-auto">
+          <div className="flex items-center gap-2.5 sm:gap-3 pointer-events-none">
+            <FileIcon name={file.name} mime={file.mime} size="sm" className="shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span
+                  className="font-medium text-left line-clamp-2 sm:line-clamp-1 break-words sm:truncate min-w-0 flex-1"
+                  title={file.name}
+                >
+                  {file.name}
+                </span>
+                {file.starred && (
+                  <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400 shrink-0 ml-0.5" />
+                )}
+                {file.offline && (
+                  <CheckCircle className="h-3.5 w-3.5 text-emerald-500 fill-emerald-500/20 shrink-0 ml-0.5" />
+                )}
+              </div>
+              <div className="sm:hidden text-[10px] text-[#444746] dark:text-[#8e918f] font-normal flex items-center gap-1.5 mt-0.5">
+                <span>{formattedSize}</span>
+                <span>•</span>
+                <span>{formattedDateShort}</span>
+              </div>
+            </div>
+          </div>
+        </td>
+        <td className="py-3 px-4 hidden sm:table-cell text-xs text-[#444746] dark:text-[#8e918f] pointer-events-none">
+          {fileTypeLabel}
+        </td>
+        <td className="py-3 px-4 hidden md:table-cell text-xs text-[#444746] dark:text-[#8e918f] pointer-events-none">
+          {formattedSize}
+        </td>
+        <td className="py-3 px-4 hidden lg:table-cell text-xs text-[#444746] dark:text-[#8e918f] pointer-events-none">
+          {formattedDateFull}
+        </td>
+        <td className="py-2.5 sm:py-3 px-2 sm:px-4 text-center" data-no-drag onClick={(e) => e.stopPropagation()}>
+          <div className={cn("transition-opacity", isMobile ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100")}>
+            <FileActionsMenu
+              file={file}
+              onPreview={onPreview}
+              onEdit={onEdit}
+              onDownload={onDownload}
+              onRename={onRename}
+              onStarToggle={onStarToggle}
+              onTrash={onTrash}
+              onDeletePermanently={onDeletePermanently}
+              onArchive={onArchive}
+              onUnarchive={onUnarchive}
+              onOfflineToggle={onOfflineToggle}
+              onGetInfo={onGetInfo}
+            />
+          </div>
+        </td>
+      </tr>
+    </FileContextMenu>
+  );
+});
+
+
+
+
+interface FileBrowserProps {
+  folderPath?: string;
+  mode?: "drive" | "starred" | "recent" | "trash" | "search" | "archived" | "backups";
+  searchQuery?: string;
+}
+
+export function FileBrowser({ folderPath = "/", mode = "drive", searchQuery = "" }: FileBrowserProps) {
+  const { t, i18n } = useTranslation("files");
+  const navigate = useNavigate();
+  const files = useFileStore((state) => state.files);
+  const selectedIds = useFileStore((state) => state.selectedIds);
+  const selectedIdsSet = useFileStore((state) => state.selectedIdsSet);
+  const isLoading = useFileStore((state) => state.isLoading);
+  const bootstrapComplete = useFileStore((state) => state.bootstrapComplete);
+  const indexLoadState = useFileStore((state) => state.indexLoadState);
+  const indexLoadError = useFileStore((state) => state.indexLoadError);
+  const [retryingIndex, setRetryingIndex] = useState(false);
+  const setFolder = useFileStore((state) => state.setFolder);
+  const toggleSelect = useFileStore((state) => state.toggleSelect);
+  const setSelectedIds = useFileStore((state) => state.setSelectedIds);
+  const clearSelection = useFileStore((state) => state.clearSelection);
+
+  const {
+    viewMode,
+    setViewMode,
+    sortBy,
+    setSortBy,
+    filterType,
+    setFilterType,
+  } = useUIStore();
+  const {
+    createFolder,
+    renameFile,
+    toggleStar,
+    moveToTrash,
+    restoreFromTrash,
+    archiveFile,
+    unarchiveFile,
+    deletePermanently,
+    emptyTrash,
+    isOperating,
+    moveMultipleToTrash,
+    restoreMultipleFromTrash,
+    deleteMultiplePermanently,
+    toggleOffline,
+    moveMultipleFilesOrFolders,
+  } = useFileActions();
+
+  const isMobile = useIsMobile();
+  const touchTimeoutRef = useRef<number | null>(null);
+  const [mobileContextFile, setMobileContextFile] = useState<TeleFile | null>(null);
+  const [dateRangeFilter, setDateRangeFilter] = useState<DateRangeFilter>("all");
+  const [sizeRangeFilter, setSizeRangeFilter] = useState<SizeRangeFilter>("all");
+
+  const {
+    dragOverId,
+    draggedId,
+    internalDrag,
+    isDraggingActive,
+    suppressClickRef,
+    handlePointerDown,
+    handleDragOverCard,
+    handleDrop,
+    handleGlobalDragOver,
+    handleGlobalDrop,
+  } = useFileBrowserDragAndDrop({
+    files,
+    folderPath,
+    isMobile,
+    selectedIds,
+    selectedIdsSet,
+    clearSelection,
+    moveMultipleFilesOrFolders,
+  });
+
+  // Dialog states
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<TeleFile | null>(null);
+  const [newFileName, setNewFileName] = useState("");
+  const [emptyTrashDialogOpen, setEmptyTrashDialogOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<TeleFile | null>(null);
+  const [infoTarget, setInfoTarget] = useState<TeleFile | null>(null);
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
+  const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
+  const [failedThumbSrcs, setFailedThumbSrcs] = useState<Record<string, string>>({});
+
+  // Progressive render limit for memory & DOM performance on large directories.
+  // 72 initial items cleanly fills all responsive grid column variants (2, 3, 4, 6, 8)
+  // without ragged rows, while keeping cold DOM mounts ultra-fast.
+  const INITIAL_RENDER_LIMIT = 72;
+  const SCROLL_BATCH_SIZE = 72;
+  const SCROLL_TRIGGER_LOOKAHEAD_PX = 650;
+  const [renderLimit, setRenderLimit] = useState(INITIAL_RENDER_LIMIT);
+  const renderLimitRef = useRef(INITIAL_RENDER_LIMIT);
+  renderLimitRef.current = renderLimit;
+  const isExpandingBatchRef = useRef(false);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const scrollSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const totalDisplayCountRef = useRef(0);
+
+  // Restore scroll position for current folder/mode
+  useEffect(() => {
+    if (scrollContainerRef.current) {
+      const saved = sessionStorage.getItem(`teledrive_scroll_${mode}_${folderPath}`);
+      if (saved) {
+        scrollContainerRef.current.scrollTop = Number(saved);
+      }
+    }
+  }, [folderPath, mode]);
+
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    const scrollTop = target.scrollTop;
+    // 650px lookahead buffer ensures smooth scrolling without ever showing empty space or bottom hitch
+    if (
+      !isExpandingBatchRef.current &&
+      renderLimitRef.current < totalDisplayCountRef.current &&
+      target.scrollTop + target.clientHeight >= target.scrollHeight - SCROLL_TRIGGER_LOOKAHEAD_PX
+    ) {
+      isExpandingBatchRef.current = true;
+      setRenderLimit((prev) => Math.min(prev + SCROLL_BATCH_SIZE, totalDisplayCountRef.current));
+      requestAnimationFrame(() => {
+        isExpandingBatchRef.current = false;
+      });
+    }
+    if (scrollSaveTimerRef.current) {
+      clearTimeout(scrollSaveTimerRef.current);
+    }
+    scrollSaveTimerRef.current = setTimeout(() => {
+      sessionStorage.setItem(`teledrive_scroll_${mode}_${folderPath}`, String(scrollTop));
+    }, 120);
+  }, [mode, folderPath]);
+
+  // Clean up scroll save timer on unmount
+  useEffect(() => {
+    return () => {
+      if (scrollSaveTimerRef.current) {
+        clearTimeout(scrollSaveTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Update current folder path in store on mount/change
+  useEffect(() => {
+    if (mode === "drive") {
+      const currentFolder = useFileStore.getState().currentFolder;
+      if (currentFolder !== folderPath) {
+        setFolder(folderPath);
+      }
+    }
+  }, [folderPath, mode, setFolder]);
+
+  // ── Memoized derived data ───────────────────────────────────────────────
+
+  const sortLabel = useMemo(() => {
+    switch (sortBy) {
+      case "name_asc": return t("browser.sort.short.nameAsc");
+      case "name_desc": return t("browser.sort.short.nameDesc");
+      case "date_desc": return t("browser.sort.short.newest");
+      case "date_asc": return t("browser.sort.short.oldest");
+      case "size_desc": return t("browser.sort.short.largest");
+      case "size_asc": return t("browser.sort.short.smallest");
+      default: return t("browser.sort.short.nameAsc");
+    }
+  }, [sortBy, t]);
+
+  const activeSortBy = useMemo(
+    () => (mode === "recent" && sortBy === "name_asc" ? "date_desc" : sortBy),
+    [mode, sortBy],
+  );
+
+  useEffect(() => {
+    setRenderLimit(INITIAL_RENDER_LIMIT);
+    renderLimitRef.current = INITIAL_RENDER_LIMIT;
+    isExpandingBatchRef.current = false;
+  }, [folderPath, mode, filterType, searchQuery, activeSortBy]);
+
+  const activeFiles = useMemo(
+    () =>
+      files
+        .filter((file) => !file.trashed && !file.archived)
+        // Backup items (files AND their reconstructed parent folder entries)
+        // live under `/TeleDrive Backups/<device>/...`. Hide them from every
+        // mode EXCEPT the dedicated `backups` view — keeps My Drive /
+        // Recent / Starred / Archived / Search free of backup noise even
+        // if the user stars or otherwise interacts with a backup entry.
+        // See src/lib/backup/visibility.ts for the predicate.
+        .filter((file) => mode === "backups" || !isBackupItem(file)),
+    [files, mode],
+  );
+
+  /**
+   * Render-layer dedup. Even though `metadataStore.healAndSave` collapses
+   * duplicates on cold start, the in-memory `state.files` can still contain
+   * folder duplicates between cold starts because:
+   *   - Older remote-delta merges could skip folder collapsing.
+   *   - Cached folder entries can predate the canonical `folderIdForPath`
+   *     scheme, so a folder can exist under multiple ids until healing runs.
+   *
+   * Without this pass, two folder entries with the same full path but
+   * different ids render as two separate cards (each keyed by `folder.id`).
+   * The fix mirrors `healAndSave`: dedupeByMessageId → dedupeByContentKey
+   * → collapseDuplicateFolders. The output `useMemo`s downstream stay
+   * structurally the same; only the input is cleaner.
+   */
+  const dedupedActiveFiles = useMemo(
+    () => collapseDuplicateFolders(dedupeByContentKey(dedupeByMessageId(activeFiles))),
+    [activeFiles],
+  );
+
+  const folderEntriesIndex = useMemo(() => {
+    const index = new Map<string, TeleFile[]>();
+    for (const file of dedupedActiveFiles) {
+      const normalized = normalizeFolderPath(file.folderPath);
+      const bucket = index.get(normalized);
+      if (bucket) {
+        bucket.push(file);
+      } else {
+        index.set(normalized, [file]);
+      }
+    }
+    return index;
+  }, [dedupedActiveFiles]);
+
+  // Compute ONLY the slice that the current `mode` actually needs.
+// Previously this allocated four filtered arrays eagerly (starred/recent/
+// archived/trash) on every render, costing 3×O(N) wasted work when only
+// one of them was being read by `displayFiles`. Now we compute exactly
+// one slice — and we only pay for folderEntriesIndex.get(folderPath) when
+// the user is on a drive/folder view.
+  const indexedFiles = useMemo(() => {
+    switch (mode) {
+      case "drive":
+        return folderEntriesIndex.get(normalizeFolderPath(folderPath)) ?? EMPTY_FILES;
+      case "starred":
+        return dedupedActiveFiles.filter((file) => file.starred);
+      case "recent":
+        return dedupedActiveFiles;
+      case "trash":
+        // Trash bypasses `activeFiles` (it deliberately keeps trashed
+        // items), so apply the backup-exclusion filter inline to keep
+        // the leak-stop uniform across modes. The `mode === "backups"`
+        // branch below handles its own slice, so by construction this
+        // case only runs when the user is on the Trash view, where
+        // backups should still be hidden.
+        return files.filter(
+          (file) => file.trashed && !isBackupItem(file),
+        );
+      case "archived":
+        return files.filter((file) => file.archived && !file.trashed);
+      case "backups":
+        // Drive-style bucket lookup at `folderPath`. The reconstructor
+        // creates parent folder entries on bootstrap, so the direct-
+        // child bucket is normally enough — and lets us keep the
+        // folder-as-card UX that matches My Drive.
+        //
+        // IMPORTANT: do NOT `.filter(isBackupItem)` the bucket here.
+        // The device folder entry that lives at `folderPath ===
+        // "/TeleDrive Backups"` exactly (no trailing slash) is
+        // legitimately a backup item, and an earlier version of this
+        // predicate used a strict `.startsWith("/TeleDrive Backups/")`
+        // that silently stripped it. The `activeFiles` slice above
+        // already drops non-backup entries for non-backups modes, so
+        // nothing non-backup should reach this branch — and if any
+        // did, `dedupedActiveFiles` is already the trimmed set.
+        //
+        // Fallback: if the direct-child bucket is empty BUT there ARE
+        // backup items somewhere under `folderPath`, the user's
+        // localStorage cache must be missing the intermediate folder
+        // entries (cold-start race or older pre-reconstructor cache).
+        // Walk descendants and synthesise one folder entry per
+        // immediate child segment, so the user can still drill into
+        // their backups instead of seeing an empty listing.
+        {
+          const direct = folderEntriesIndex.get(folderPath);
+          if (direct && direct.length > 0) {
+            return direct;
+          }
+          const prefix = folderPath.endsWith("/") ? folderPath : `${folderPath}/`;
+          const descendants = dedupedActiveFiles.filter(
+            (f) => isBackupItem(f) && f.folderPath.startsWith(prefix),
+          );
+          if (descendants.length === 0) return EMPTY_FILES;
+          // Synthesise immediate-child folder entries by collecting
+          // the first path segment after `prefix` for every
+          // descendant. Files whose own folderPath === folderPath
+          // (i.e. they live directly in this folder) are passed
+          // through verbatim.
+          const synthMap = new Map<string, TeleFile>();
+          const directChildren: TeleFile[] = [];
+          for (const f of descendants) {
+            if (f.folderPath === folderPath) {
+              directChildren.push(f);
+              continue;
+            }
+            const rest = f.folderPath.substring(prefix.length);
+            const seg = rest.split("/")[0];
+            if (!seg) continue;
+            if (!synthMap.has(seg)) {
+              synthMap.set(seg, {
+                // Synthetic folder — id derived from the full path so
+                // it survives a reconstructMissingFolders pass later
+                // without colliding with the real folder entry.
+                id: folderIdForPath(`${folderPath}/${seg}`),
+                name: seg,
+                size: 0,
+                mime: "inode/directory",
+                folderPath,
+                messageId: 0,
+                channelId: f.channelId,
+                uploadedAt: f.uploadedAt,
+                starred: false,
+                trashed: false,
+                archived: false,
+              });
+            }
+          }
+          // Stable alphabetical sort so the synthesised listing
+          // doesn't shuffle between renders. Direct files are also
+          // folded in so the user sees files-in-folder alongside
+          // folders-in-folder (matching the native folder browser).
+          const folders = Array.from(synthMap.values()).sort((a, b) =>
+            a.name.localeCompare(b.name),
+          );
+          return [...folders, ...directChildren];
+        }
+      default:
+        // search mode — fuzzySearch handles its own filtering; pass dedupedActiveFiles.
+        return dedupedActiveFiles;
+    }
+  }, [mode, folderEntriesIndex, folderPath, dedupedActiveFiles, files]);
+
+  // Full filtered + sorted display list — optimized for folder navigation
+  const { displayFiles, folders, regularFiles } = useMemo(() => {
+    let filtered: TeleFile[];
+
+    if (mode === "search") {
+      filtered = fuzzySearch(dedupedActiveFiles, searchQuery, {
+        dateRange: dateRangeFilter,
+        sizeRange: sizeRangeFilter,
+      });
+    } else {
+      // Always copy before sorting so we never mutate the bucket arrays
+      // inside folderEntriesIndex (which are themselves memoized; mutating
+      // them silently corrupts the cache for the next render).
+      filtered = applySearchFilters([...indexedFiles], {
+        dateRange: dateRangeFilter,
+        sizeRange: sizeRangeFilter,
+      });
+    }
+
+    const visibleFiles =
+      filterType === "All"
+        ? filtered
+        : filtered.filter((f) => !isDirectory(f) && getFileCategory(f.name, f.mime) === filterType);
+
+    visibleFiles.sort((a, b) => {
+      const aIsDir = isDirectory(a);
+      const bIsDir = isDirectory(b);
+      if (aIsDir && !bIsDir) return -1;
+      if (!aIsDir && bIsDir) return 1;
+      switch (activeSortBy) {
+        case "name_asc": return compareNames(a.name, b.name);
+        case "name_desc": return compareNames(b.name, a.name);
+        case "date_asc": return (a.lastOpenedAt || a.uploadedAt) - (b.lastOpenedAt || b.uploadedAt);
+        case "date_desc": return (b.lastOpenedAt || b.uploadedAt) - (a.lastOpenedAt || a.uploadedAt);
+        case "size_asc": return a.size - b.size;
+        case "size_desc": return b.size - a.size;
+        default: return compareNames(a.name, b.name);
+      }
+    });
+
+    const nextFolders: TeleFile[] = [];
+    const nextRegularFiles: TeleFile[] = [];
+    for (const file of visibleFiles) {
+      if (isDirectory(file)) {
+        nextFolders.push(file);
+      } else {
+        nextRegularFiles.push(file);
+      }
+    }
+
+    return {
+      displayFiles: visibleFiles,
+      folders: nextFolders,
+      regularFiles: nextRegularFiles,
+    };
+  }, [dedupedActiveFiles, activeSortBy, filterType, dateRangeFilter, sizeRangeFilter, indexedFiles, mode, searchQuery]);
+
+  // Keep total display count ref fresh for the bounded scroll handler
+  totalDisplayCountRef.current =
+    viewMode === "grid" ? Math.max(folders.length, regularFiles.length) : displayFiles.length;
+
+  // Lazily resolve compact thumbnails for visible Grid cards without writing
+  // ephemeral local/blob URLs back into the synced Telegram Schema v3 index.
+  // Batches state commits in 50ms windows to avoid N full-grid re-renders per scroll.
+  useEffect(() => {
+    if (viewMode !== "grid" || regularFiles.length === 0) return;
+    const visible = regularFiles.slice(0, renderLimit);
+    const pendingBatch = new Map<string, string>();
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const flush = () => {
+      flushTimer = null;
+      if (pendingBatch.size === 0) return;
+      const entries = Array.from(pendingBatch.entries());
+      pendingBatch.clear();
+      setThumbUrls((prev) => {
+        let changed = false;
+        for (const [id, url] of entries) {
+          if (prev[id] !== url) {
+            changed = true;
+            break;
+          }
+        }
+        if (!changed) return prev;
+        const next = { ...prev };
+        for (const [id, url] of entries) next[id] = url;
+        return next;
+      });
+    };
+
+    const cancel = requestFileThumbnails(visible, (fileId, url) => {
+      pendingBatch.set(fileId, url);
+      if (!flushTimer) {
+        flushTimer = setTimeout(flush, 50);
+      }
+    });
+
+    return () => {
+      if (flushTimer) clearTimeout(flushTimer);
+      cancel();
+    };
+  }, [viewMode, regularFiles, renderLimit]);
+
+  // Breadcrumbs — only recompute when folderPath/mode change.
+  // For `mode === "backups"` the link prefix is the Backups route so the
+  // user stays inside the Backups view while drilling down. The first
+  // crumb is always "Backups" and links back to /drive/backups (the
+  // device-root listing).
+  const breadcrumbs = useMemo(() => {
+    if (mode === "backups") {
+      // At the Backups root we don't emit any crumbs — the hardcoded
+      // "Backups" link is rendered just above the breadcrumb map, and
+      // emitting another "Backups" crumb here would print
+      // "Backups > Backups" in the trail. Empty array suppresses the
+      // extra chevron + pill.
+      if (!folderPath || folderPath === "/TeleDrive Backups") {
+        return [];
+      }
+      // segments[0] is the literal "TeleDrive Backups" — the synthetic
+      // namespace root. The hardcoded "Backups" link above represents
+      // it, so we skip it and start building crumbs from segments[1]
+      // (the device segment) onwards.
+      const segments = folderPath.split("/").filter(Boolean);
+      const crumbs: { name: string; link: string }[] = [];
+      let accumPath = "";
+      for (let i = 1; i < segments.length; i++) {
+        accumPath += `/${segments[i]}`;
+        crumbs.push({
+          name: segments[i],
+          link: `/drive/backups/folder${accumPath}`,
+        });
+      }
+      return crumbs;
+    }
+    if (folderPath === "/") return [];
+    const segments = folderPath.split("/").filter(Boolean);
+    let accumPath = "";
+    return segments.map((seg) => {
+      accumPath += `/${seg}`;
+      return { name: seg, link: `/drive/folder${accumPath}` };
+    });
+  }, [folderPath, mode]);
+
+  // Header title — only recompute when mode/folderPath/searchQuery change
+  const headerTitle = useMemo(() => {
+    switch (mode) {
+      case "starred": return t("browser.header.starred");
+      case "recent": return t("browser.header.recent");
+      case "trash": return t("browser.header.trash");
+      case "archived": return t("browser.header.archived");
+      case "backups":
+        // The Backups view is rooted at `/TeleDrive Backups/<device>/...`,
+        // so render the device segment as the header. Falls back to the
+        // generic "Backups" label when the user is at the top level.
+        if (folderPath === "/TeleDrive Backups") return t("browser.header.backups");
+        if (folderPath && folderPath.startsWith("/TeleDrive Backups/")) {
+          const segments = folderPath.split("/").filter(Boolean);
+          return segments[segments.length - 1] || t("browser.header.backups");
+        }
+        return t("browser.header.backups");
+      case "search": return t("browser.header.searchResults", { query: searchQuery });
+      default:
+        if (folderPath !== "/") {
+          const segments = folderPath.split("/").filter(Boolean);
+          return segments[segments.length - 1] || t("browser.header.myDrive");
+        }
+        return t("browser.header.myDrive");
+    }
+  }, [mode, folderPath, searchQuery, t]);
+
+  // ── Memoized callbacks ──────────────────────────────────────────────────
+
+  const toastPreview = useCallback((file: TeleFile) => {
+    window.dispatchEvent(new CustomEvent("teledrive-preview-file", { detail: file }));
+  }, []);
+
+  const handleEdit = useCallback((file: TeleFile) => {
+    window.dispatchEvent(new CustomEvent("teledrive-edit-file", { detail: file }));
+  }, []);
+
+  const handleDownload = useCallback((file: TeleFile) => {
+    window.dispatchEvent(new CustomEvent("teledrive-download-file", { detail: file }));
+  }, []);
+
+  const handleOpenSystemApp = useCallback(async (file: TeleFile) => {
+    const { isWebRuntime } = await import("@/lib/runtime/bridge");
+    if (isWebRuntime()) {
+      handleDownload(file);
+      return;
+    }
+    try {
+      const { appLocalDataDir, join } = await import("@tauri-apps/api/path");
+      const { invoke } = await import("@tauri-apps/api/core");
+      const { openPath } = await import("@tauri-apps/plugin-opener");
+      const { exists } = await import("@tauri-apps/plugin-fs");
+      const { streamFileToLocalPath } = await import("@/lib/telegram/downloader");
+      const { saveBinaryFile } = await import("@/lib/storage/safeFileWriter");
+      const { readOfflineCache, isCachedOffline } = await import("@/lib/storage/offlineStorage");
+
+      const safeName = file.name.replace(/[/\\?%*:|"<>]/g, "_").trim() || "file";
+      const expectedPlainSize = file.enc?.plainSize ?? file.size;
+      let tempFilePath = await invoke<string | null>("check_preview_cache", {
+        fileName: `${file.id}_${safeName}`,
+        expectedSize: expectedPlainSize > 0 ? expectedPlainSize : null,
+      }).catch(() => null);
+
+      if (!tempFilePath) {
+        const cacheDir = await appLocalDataDir();
+        tempFilePath = await join(cacheDir, `temp_${file.id}_${safeName}`);
+
+        let fileReady = false;
+        try {
+          fileReady = await exists(tempFilePath);
+        } catch {
+          fileReady = false;
+        }
+
+        if (!fileReady) {
+          if (file.offline && (await isCachedOffline(file.id))) {
+            const offlineBuf = await readOfflineCache(file.id);
+            await saveBinaryFile(tempFilePath, offlineBuf);
+          } else {
+            toast.info(t("browser.systemApp.preparing", { name: file.name }));
+            await streamFileToLocalPath(
+              file.channelId,
+              file.messageId,
+              tempFilePath,
+              undefined,
+              undefined,
+              file.size,
+              {
+                segments: file.segments,
+                enc: file.enc,
+                plainSize: file.enc?.plainSize ?? file.size,
+              }
+            );
+          }
+        }
+      }
+
+      try {
+        await openPath(tempFilePath);
+      } catch (openerErr) {
+        logger.warn("plugin-opener failed, invoking native open_file_in_system_viewer:", openerErr);
+        await invoke("open_file_in_system_viewer", { path: tempFilePath });
+      }
+      toast.success(t("browser.systemApp.opened", { name: file.name }));
+    } catch (err: any) {
+      logger.error("Failed to open file in system app:", err);
+      toast.error(t("browser.systemApp.failed", { error: err.message || t("browser.systemApp.unknownError") }));
+    }
+  }, [t, handleDownload]);
+
+  const triggerUpload = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("teledrive-trigger-upload"));
+  }, []);
+
+
+  const handleItemDoubleClick = useCallback((file: TeleFile) => {
+    if (suppressClickRef.current) return;
+    const isDir = file.mime === "inode/directory" || file.mime === "application/x-directory";
+    if (isDir) {
+      clearSelection();
+      const fullPath = file.folderPath === "/" ? `/${file.name}` : `${file.folderPath}/${file.name}`;
+      // Backups folders live under `/TeleDrive Backups/...`; route them
+      // through the dedicated Backups sub-route so the user stays in
+      // the read-only Backups view rather than landing on a 404.
+      //
+      // The wildcard after `/drive/backups/folder/` carries the path
+      // RELATIVE to BACKUP_ROOT — e.g. `Mac (macOS)/Documents`, not the
+      // full `/TeleDrive Backups/Mac (macOS)/Documents`. BackupsFolderPage
+      // prepends BACKUP_ROOT when reconstructing the folderPath, so a
+      // duplicated prefix here would produce a non-existent bucket and
+      // the user would see an empty listing.
+      if (mode === "backups") {
+        const relative =
+          fullPath === BACKUP_ROOT
+            ? ""
+            : fullPath.startsWith(BACKUP_ROOT_PREFIX)
+            ? fullPath.substring(BACKUP_ROOT_PREFIX.length)
+            : fullPath.replace(/^\/+/, "");
+        navigate(`/drive/backups/folder${relative ? `/${relative}` : ""}`);
+      } else {
+        navigate(`/drive/folder${fullPath}`);
+      }
+    } else {
+      toastPreview(file);
+    }
+  }, [clearSelection, navigate, toastPreview, mode]);
+
+  const handleItemClick = useCallback((e: React.MouseEvent, file: TeleFile) => {
+    if (suppressClickRef.current) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+      e.preventDefault();
+    }
+    const isDir = file.mime === "inode/directory" || file.mime === "application/x-directory";
+    // On mobile touch devices without active multi-selection, single-tap a directory to navigate directly
+    if (isMobile && selectedIds.length === 0 && isDir) {
+      handleItemDoubleClick(file);
+      return;
+    }
+    toggleSelect(file.id);
+  }, [isMobile, selectedIds.length, handleItemDoubleClick, toggleSelect]);
+
+  // Dialog actions
+  const handleCreateFolderSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newFolderName.trim()) {
+      createFolder(newFolderName);
+      setNewFolderName("");
+      setCreateDialogOpen(false);
+    }
+  };
+
+  const handleRenameSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (renameTarget && newFileName.trim()) {
+      renameFile(renameTarget.id, newFileName);
+      setNewFileName("");
+      setRenameTarget(null);
+      setRenameDialogOpen(false);
+    }
+  };
+
+  const openRenameDialog = useCallback((file: TeleFile) => {
+    setRenameTarget(file);
+    setNewFileName(file.name);
+    setRenameDialogOpen(true);
+  }, []);
+
+  // Listen to keyboard shortcut events
+  useEffect(() => {
+    const handleRenameEvent = (e: Event) => {
+      const file = (e as CustomEvent).detail as TeleFile;
+      if (file) {
+        openRenameDialog(file);
+      }
+    };
+    
+    const handleDeleteSelected = () => {
+      if (selectedIds.length > 0) {
+        setBulkDeleteDialogOpen(true);
+      }
+    };
+
+    const handleCreateFolderTrigger = () => {
+      setCreateDialogOpen(true);
+    };
+
+    window.addEventListener("teledrive-rename-file-event", handleRenameEvent);
+    window.addEventListener("teledrive-delete-selected", handleDeleteSelected);
+    window.addEventListener("teledrive-trigger-create-folder", handleCreateFolderTrigger);
+    return () => {
+      window.removeEventListener("teledrive-rename-file-event", handleRenameEvent);
+      window.removeEventListener("teledrive-delete-selected", handleDeleteSelected);
+      window.removeEventListener("teledrive-trigger-create-folder", handleCreateFolderTrigger);
+    };
+  }, [openRenameDialog, deletePermanently, selectedIds, clearSelection]);
+
+  const handleTouchStartItem = useCallback((file: TeleFile) => {
+    if (!isMobile) return;
+    if (touchTimeoutRef.current) window.clearTimeout(touchTimeoutRef.current);
+    touchTimeoutRef.current = window.setTimeout(() => {
+      setMobileContextFile(file);
+    }, 600);
+  }, [isMobile]);
+
+  const handleTouchEndItem = useCallback(() => {
+    if (touchTimeoutRef.current) {
+      window.clearTimeout(touchTimeoutRef.current);
+      touchTimeoutRef.current = null;
+    }
+  }, []);
+
+  const handleThumbError = useCallback((file: TeleFile, badSrc: string) => {
+    invalidateThumbnailCache(file);
+    setFailedThumbSrcs((prev) =>
+      prev[file.id] === badSrc ? prev : { ...prev, [file.id]: badSrc }
+    );
+    setThumbUrls((prev) => {
+      if (!prev[file.id]) return prev;
+      const next = { ...prev };
+      delete next[file.id];
+      return next;
+    });
+  }, []);
+
+  // Bulk actions
+  const handleBulkDownload = async () => {
+    const selectedSet = new Set(selectedIds);
+    const selectedItems = files.filter((f) => selectedSet.has(f.id));
+    if (selectedItems.length === 0) return;
+
+    if (selectedItems.length === 1 && !isDirectory(selectedItems[0])) {
+      handleDownload(selectedItems[0]);
+      clearSelection();
+      return;
+    }
+
+    clearSelection();
+    await downloadSelectionAsZip(files, selectedItems);
+  };
+
+  const handleBulkTrash = async () => {
+    await moveMultipleToTrash(selectedIds);
+    clearSelection();
+  };
+
+  const handleBulkRestore = async () => {
+    await restoreMultipleFromTrash(selectedIds);
+    clearSelection();
+  };
+
+  const handleBulkDelete = () => {
+    setBulkDeleteDialogOpen(true);
+  };
+
+  const confirmBulkDelete = async () => {
+    setBulkDeleteDialogOpen(false);
+    await deleteMultiplePermanently(selectedIds);
+    clearSelection();
+  };
+
+  // Render helpers (headerTitle is now memoized above)
+
+  const renderEmptyState = () => {
+    // A non-empty channel with no complete index is damaged, not an empty
+    // drive. Never invite uploads into that state (they would be persisted on
+    // top of an unknown base once discovery falsely "succeeds").
+    if (indexLoadState === "incomplete") {
+      const reason =
+        indexLoadError &&
+        ["not_found", "partial_manifest", "timeout", "network"].includes(indexLoadError)
+          ? i18n.t(`messages:indexLoad.reason.${indexLoadError}`)
+          : null;
+      return (
+        <div className="flex flex-col items-center justify-center py-20 px-6 text-center gap-3">
+          <div className="h-12 w-12 rounded-full bg-amber-50 dark:bg-amber-950/40 flex items-center justify-center">
+            <AlertTriangle className="h-6 w-6 text-amber-700 dark:text-amber-300" />
+          </div>
+          <h2 className="text-lg font-semibold text-[#1f1f1f] dark:text-[#e3e3e3]">
+            {i18n.t("messages:indexLoad.bannerTitle")}
+          </h2>
+          <p className="max-w-md text-sm text-[#444746] dark:text-[#c4c7c5]">
+            {i18n.t("messages:indexLoad.bannerBodyEmpty")}
+          </p>
+          {reason && (
+            <p className="text-xs text-[#747775] dark:text-[#8e918f]">{reason}</p>
+          )}
+          <Button
+            onClick={() => {
+              setRetryingIndex(true);
+              retryIndexNow();
+              setTimeout(() => setRetryingIndex(false), 2000);
+            }}
+            className="mt-2"
+          >
+            <RefreshCw className={cn("h-4 w-4 mr-2", retryingIndex && "animate-spin")} />
+            {retryingIndex
+              ? i18n.t("messages:indexLoad.retrying")
+              : i18n.t("messages:indexLoad.retry")}
+          </Button>
+        </div>
+      );
+    }
+    return (
+      <EmptyState
+        mode={mode}
+        folderPath={folderPath}
+        searchQuery={searchQuery}
+        onUploadFiles={mode === "drive" ? triggerUpload : undefined}
+        onCreateFolder={mode === "drive" ? () => setCreateDialogOpen(true) : undefined}
+      />
+    );
+  };
+
+  return (
+    <div className={cn("flex flex-col h-full px-3 pt-2 pb-4 md:p-6 lg:p-7 space-y-4", isDraggingActive && "dragging-active")}>
+      {/* File Browser Header Toolbar: Show on desktop OR when there are breadcrumbs on mobile */}
+      {(!isMobile || breadcrumbs.length > 0) && (
+        <div className="flex flex-col gap-2.5 sm:flex-row sm:items-start sm:justify-between pb-1 sm:pb-2 shrink-0">
+          <div className="space-y-1">
+            {/* Hide h1 on mobile — the DriveLayout topbar already shows the page title inline */}
+            <h1 className="hidden md:block text-2xl font-semibold tracking-tight text-[#1f1f1f] dark:text-[#e3e3e3]">
+              {headerTitle}
+            </h1>
+            {(mode === "drive" || mode === "backups") && breadcrumbs.length > 0 && (
+              <div className="flex items-center gap-1.5 text-xs text-[#444746] dark:text-[#c4c7c5] overflow-x-auto whitespace-nowrap py-0.5">
+                {mode === "drive" ? (
+                  <Link
+                    to="/drive/my-drive"
+                    onClick={clearSelection}
+                    onDragOver={(e) => handleDragOverCard(e, "crumb_home")}
+                    onDrop={(e) => handleDrop(e, "/")}
+                    data-drop-path="/"
+                    className={cn(
+                      "flex items-center gap-1 hover:text-[#0b57d0] dark:hover:text-[#a8c7fa] transition-colors font-medium text-[#444746] dark:text-[#c4c7c5] px-1.5 py-0.5 rounded-md",
+                      isDraggingActive && "pointer-events-none-children",
+                      dragOverId === "crumb_home" && "bg-[#c2e7ff] text-[#001d35] dark:bg-[#004a77] dark:text-[#c2e7ff]"
+                    )}
+                  >
+                    <Home className="h-3.5 w-3.5 shrink-0" />
+                    <span>{t("browser.header.myDrive")}</span>
+                  </Link>
+                ) : (
+                  <Link
+                    to="/drive/backups"
+                    onClick={clearSelection}
+                    className={cn(
+                      "flex items-center gap-1 hover:text-[#0b57d0] dark:hover:text-[#a8c7fa] transition-colors font-medium text-[#444746] dark:text-[#c4c7c5] px-1.5 py-0.5 rounded-md",
+                      isDraggingActive && "pointer-events-none-children",
+                    )}
+                  >
+                    <Shield className="h-3.5 w-3.5 shrink-0" />
+                    <span>{t("browser.header.backups")}</span>
+                  </Link>
+                )}
+
+                {breadcrumbs.map((crumb, idx) => (
+                  <div key={crumb.link} className="flex items-center gap-1 shrink-0">
+                    <ChevronRight className="h-3.5 w-3.5 text-[#747775] dark:text-[#8e918f] shrink-0" />
+                    {idx === breadcrumbs.length - 1 ? (
+                      <span className="font-semibold text-[#1f1f1f] dark:text-[#e3e3e3] px-2 py-0.5 rounded-md bg-[#f0f4f9] dark:bg-[#161719]">
+                        {crumb.name}
+                      </span>
+                    ) : (
+                      <Link
+                        to={crumb.link}
+                        onClick={clearSelection}
+                        onDragOver={mode !== "backups" ? (e) => handleDragOverCard(e, `crumb_${crumb.link}`) : undefined}
+                        onDrop={mode !== "backups" ? (e) => {
+                          const drivePrefix = "/drive/folder";
+                          const backupsPrefix = "/drive/backups/folder";
+                          let targetPath: string;
+                          if (crumb.link.startsWith(backupsPrefix)) {
+                            targetPath = crumb.link.substring(backupsPrefix.length);
+                          } else {
+                            targetPath = crumb.link.substring(drivePrefix.length);
+                          }
+                          handleDrop(e, targetPath);
+                        } : undefined}
+                        data-drop-path={
+                          mode === "backups"
+                            ? undefined
+                            : ((crumb.link.startsWith("/drive/backups/folder")
+                              ? crumb.link.substring("/drive/backups/folder".length)
+                              : crumb.link.substring("/drive/folder".length)) || "/")
+                        }
+                        className={cn(
+                          "hover:text-[#0b57d0] dark:hover:text-[#a8c7fa] transition-colors font-medium text-[#444746] dark:text-[#c4c7c5] px-1.5 py-0.5 rounded-md",
+                          isDraggingActive && "pointer-events-none-children",
+                          dragOverId === `crumb_${crumb.link}` && "bg-[#c2e7ff] text-[#001d35] dark:bg-[#004a77] dark:text-[#c2e7ff]"
+                        )}
+                      >
+                        {crumb.name}
+                      </Link>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Desktop Toolbar Controls */}
+          <div className="hidden sm:flex items-center gap-1.5 sm:mt-1">
+            {mode === "trash" && displayFiles.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setEmptyTrashDialogOpen(true)}
+                className="h-8.5 rounded-full text-xs border-red-300 text-red-600 dark:border-red-900/60 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 font-medium cursor-pointer mr-1"
+              >
+                <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                {t("browser.emptyTrashButton")}
+              </Button>
+            )}
+
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setViewMode(viewMode === "grid" ? "list" : "grid")}
+              className="h-9 w-9 rounded-full hover:bg-[#e9eef6] dark:hover:bg-[#1f2124] text-[#444746] dark:text-[#c4c7c5] cursor-pointer"
+              title={viewMode === "grid" ? t("browser.switchToListView") : t("browser.switchToGridView")}
+            >
+              {viewMode === "grid" ? (
+                <List className="h-4.5 w-4.5" />
+              ) : (
+                <Grid className="h-4.5 w-4.5" />
+              )}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Read-only banner for Backups */}
+      {mode === "backups" && (
+        <div className="flex items-start gap-2.5 px-4 py-3 rounded-2xl border border-emerald-200/80 dark:border-emerald-800/40 bg-emerald-50/70 dark:bg-emerald-950/20 text-xs text-emerald-900 dark:text-emerald-200 shrink-0">
+          <Shield className="h-4 w-4 mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+          <div className="flex-1 min-w-0 leading-relaxed">
+            <p className="font-bold">{t("browser.backupsBanner.title")}</p>
+            <p className="mt-0.5 text-emerald-900/80 dark:text-emerald-300/80">
+              <Trans
+                t={t}
+                i18nKey="browser.backupsBanner.description"
+                components={{
+                  settingsPath: <span className="font-mono text-[11px] bg-emerald-100/70 dark:bg-emerald-900/30 px-1.5 py-0.5 rounded" />,
+                }}
+              />
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Filters and Sorting: Google Drive filter chips & sort */}
+      <div className="flex items-center justify-between gap-2 py-0.5 shrink-0 select-none">
+        {/* Category Filter Chips */}
+        <div className="flex-1 min-w-0 flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar scroll-smooth py-0.5">
+          {[
+            { value: "All", labelKey: "browser.filters.all" },
+            { value: "Documents", labelKey: "browser.filters.documents" },
+            { value: "Images", labelKey: "browser.filters.images" },
+            { value: "Videos", labelKey: "browser.filters.videos" },
+            { value: "Audio", labelKey: "browser.filters.audio" },
+          ].map(({ value: filter, labelKey }) => {
+            const isActive = filterType === filter;
+            return (
+              <button
+                key={filter}
+                type="button"
+                onClick={() => setFilterType(filter)}
+                className={cn(
+                  "px-3 py-1.5 sm:px-3.5 text-xs font-medium rounded-lg border transition-all duration-150 cursor-pointer whitespace-nowrap active:scale-95 inline-flex items-center gap-1.5 shrink-0 outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0B57D0]/50 dark:focus-visible:ring-[#8ab4f8]/50 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+                  isActive
+                    ? "bg-[#c2e7ff] text-[#001d35] border-transparent font-semibold dark:bg-[#004a77] dark:text-[#c2e7ff] shadow-xs"
+                    : "bg-white dark:bg-[#161719] border-slate-300/70 dark:border-white/[0.04] text-[#444746] dark:text-[#c4c7c5] hover:bg-[#f0f4f9] dark:hover:bg-[#1f2124] hover:text-[#1f1f1f] dark:hover:text-[#e3e3e3]"
+                )}
+              >
+                {isActive && <Check className="h-3.5 w-3.5 text-[#001d35] dark:text-[#c2e7ff]" />}
+                {t(labelKey)}
+              </button>
+            );
+          })}
+
+          {/* Date Range Filter */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label={t("browser.filters.dateLabel", "Filter by date")}
+                className={cn(
+                  "px-2.5 py-1.5 sm:px-3 text-xs font-medium rounded-lg border transition-all duration-150 cursor-pointer whitespace-nowrap active:scale-95 inline-flex items-center gap-1.5 shrink-0 outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0B57D0]/50 dark:focus-visible:ring-[#8ab4f8]/50 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+                  dateRangeFilter !== "all"
+                    ? "bg-[#c2e7ff] text-[#001d35] border-transparent font-semibold dark:bg-[#004a77] dark:text-[#c2e7ff] shadow-xs"
+                    : "bg-white dark:bg-[#161719] border-slate-300/70 dark:border-white/[0.04] text-[#444746] dark:text-[#c4c7c5] hover:bg-[#f0f4f9] dark:hover:bg-[#1f2124] hover:text-[#1f1f1f] dark:hover:text-[#e3e3e3]"
+                )}
+              >
+                <Calendar className="h-3.5 w-3.5" />
+                <span>
+                  {dateRangeFilter === "all"
+                    ? t("browser.filters.dateAny", "Any time")
+                    : dateRangeFilter === "7d"
+                    ? t("browser.filters.date7d", "Last 7 days")
+                    : dateRangeFilter === "30d"
+                    ? t("browser.filters.date30d", "Last 30 days")
+                    : t("browser.filters.date1y", "Last year")}
+                </span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-40 rounded-xl p-1">
+              {(
+                [
+                  { value: "all", label: t("browser.filters.dateAny", "Any time") },
+                  { value: "7d", label: t("browser.filters.date7d", "Last 7 days") },
+                  { value: "30d", label: t("browser.filters.date30d", "Last 30 days") },
+                  { value: "1y", label: t("browser.filters.date1y", "Last year") },
+                ] as const
+              ).map((opt) => (
+                <DropdownMenuItem
+                  key={opt.value}
+                  onClick={() => setDateRangeFilter(opt.value)}
+                  className="text-xs rounded-lg cursor-pointer flex items-center justify-between"
+                >
+                  <span>{opt.label}</span>
+                  {dateRangeFilter === opt.value && <Check className="h-3.5 w-3.5" />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Size Range Filter */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label={t("browser.filters.sizeLabel", "Filter by size")}
+                className={cn(
+                  "px-2.5 py-1.5 sm:px-3 text-xs font-medium rounded-lg border transition-all duration-150 cursor-pointer whitespace-nowrap active:scale-95 inline-flex items-center gap-1.5 shrink-0 outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0B57D0]/50 dark:focus-visible:ring-[#8ab4f8]/50 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+                  sizeRangeFilter !== "all"
+                    ? "bg-[#c2e7ff] text-[#001d35] border-transparent font-semibold dark:bg-[#004a77] dark:text-[#c2e7ff] shadow-xs"
+                    : "bg-white dark:bg-[#161719] border-slate-300/70 dark:border-white/[0.04] text-[#444746] dark:text-[#c4c7c5] hover:bg-[#f0f4f9] dark:hover:bg-[#1f2124] hover:text-[#1f1f1f] dark:hover:text-[#e3e3e3]"
+                )}
+              >
+                <HardDrive className="h-3.5 w-3.5" />
+                <span>
+                  {sizeRangeFilter === "all"
+                    ? t("browser.filters.sizeAny", "Any size")
+                    : sizeRangeFilter === "small"
+                    ? t("browser.filters.sizeSmall", "< 1 MB")
+                    : sizeRangeFilter === "medium"
+                    ? t("browser.filters.sizeMedium", "1 – 100 MB")
+                    : t("browser.filters.sizeLarge", "> 100 MB")}
+                </span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-40 rounded-xl p-1">
+              {(
+                [
+                  { value: "all", label: t("browser.filters.sizeAny", "Any size") },
+                  { value: "small", label: t("browser.filters.sizeSmall", "< 1 MB") },
+                  { value: "medium", label: t("browser.filters.sizeMedium", "1 – 100 MB") },
+                  { value: "large", label: t("browser.filters.sizeLarge", "> 100 MB") },
+                ] as const
+              ).map((opt) => (
+                <DropdownMenuItem
+                  key={opt.value}
+                  onClick={() => setSizeRangeFilter(opt.value)}
+                  className="text-xs rounded-lg cursor-pointer flex items-center justify-between"
+                >
+                  <span>{opt.label}</span>
+                  {sizeRangeFilter === opt.value && <Check className="h-3.5 w-3.5" />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {(dateRangeFilter !== "all" || sizeRangeFilter !== "all") && (
+            <button
+              type="button"
+              onClick={() => {
+                setDateRangeFilter("all");
+                setSizeRangeFilter("all");
+              }}
+              aria-label={t("browser.filters.clear", "Clear filters")}
+              className="px-2 py-1.5 text-xs font-medium rounded-lg text-[#0b57d0] dark:text-[#a8c7fa] hover:bg-[#f0f4f9] dark:hover:bg-[#1f2124] cursor-pointer whitespace-nowrap inline-flex items-center gap-1 shrink-0"
+            >
+              <X className="h-3.5 w-3.5" />
+              <span>{t("browser.filters.clear", "Clear")}</span>
+            </button>
+          )}
+        </div>
+
+        {/* Sort Dropdown & Mobile Controls */}
+        <div className="flex items-center gap-1 shrink-0">
+          {/* Mobile Empty Trash button */}
+          {isMobile && mode === "trash" && displayFiles.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setEmptyTrashDialogOpen(true)}
+              className="h-8.5 rounded-lg text-xs border-red-300 text-red-600 dark:border-red-900/60 dark:text-red-400 px-2 cursor-pointer"
+              title={t("browser.emptyTrashButton")}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          )}
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8.5 sm:h-8 rounded-lg text-xs font-medium text-[#444746] dark:text-[#c4c7c5] hover:bg-[#f0f4f9] dark:hover:bg-[#1f2124] border border-slate-300/70 dark:border-white/[0.04] px-2.5 sm:px-3 flex items-center gap-1.5 cursor-pointer shrink-0"
+              >
+                <ArrowUpDown className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{t("browser.sort.label", { sort: sortLabel })}</span>
+                <span className="sm:hidden font-medium">{sortLabel}</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              className="w-48 rounded-xl p-1 bg-white dark:bg-[#141518] border border-slate-200 dark:border-white/[0.06] shadow-xl z-50"
+            >
+              {[
+                { value: "name_asc", labelKey: "browser.sort.options.nameAsc" },
+                { value: "name_desc", labelKey: "browser.sort.options.nameDesc" },
+                { value: "date_desc", labelKey: "browser.sort.options.dateDesc" },
+                { value: "date_asc", labelKey: "browser.sort.options.dateAsc" },
+                { value: "size_desc", labelKey: "browser.sort.options.sizeDesc" },
+                { value: "size_asc", labelKey: "browser.sort.options.sizeAsc" },
+              ].map((opt) => (
+                <DropdownMenuItem
+                  key={opt.value}
+                  onClick={() => setSortBy(opt.value)}
+                  className={cn(
+                    "flex items-center justify-between px-3 py-2 text-xs rounded-lg cursor-pointer hover:bg-[#f0f4f9] dark:hover:bg-[#1f2124] text-[#1f1f1f] dark:text-[#e3e3e3]",
+                    sortBy === opt.value && "font-bold text-[#0b57d0] dark:text-[#a8c7fa] bg-[#c2e7ff]/30 dark:bg-[#004a77]/30"
+                  )}
+                >
+                  <span>{t(opt.labelKey)}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* ViewMode toggle button on mobile */}
+          {isMobile && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setViewMode(viewMode === "grid" ? "list" : "grid")}
+              className="h-8.5 w-8.5 rounded-lg border border-slate-300/70 dark:border-white/[0.04] hover:bg-[#f0f4f9] dark:hover:bg-[#1f2124] text-[#444746] dark:text-[#c4c7c5] cursor-pointer shrink-0"
+              title={viewMode === "grid" ? t("browser.switchToListView") : t("browser.switchToGridView")}
+            >
+              {viewMode === "grid" ? (
+                <List className="h-4 w-4" />
+              ) : (
+                <Grid className="h-4 w-4" />
+              )}
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Main Files Display Area */}
+      {(isLoading || !bootstrapComplete) ? (
+        <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 overflow-y-auto">
+          {Array.from({ length: 12 }).map((_, i) => (
+            <div
+              key={i}
+              className="h-28 rounded-2xl border border-slate-200 dark:border-white/[0.04] bg-white dark:bg-[#111214] p-3 animate-pulse space-y-3"
+            >
+              <div className="h-10 w-10 bg-slate-200 dark:bg-[#161719] rounded-xl" />
+              <div className="space-y-1.5">
+                <div className="h-3 w-3/4 bg-slate-200 dark:bg-[#161719] rounded" />
+                <div className="h-2 w-1/2 bg-slate-200 dark:bg-[#161719] rounded" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : displayFiles.length === 0 ? (
+        renderEmptyState()
+      ) : viewMode === "grid" ? (
+        /* GRID VIEW */
+        <div
+          ref={scrollContainerRef}
+          className="flex-1 overflow-y-auto min-h-0 select-none pb-20 pr-1 space-y-8"
+          onDragOver={handleGlobalDragOver}
+          onDrop={handleGlobalDrop}
+          onScroll={handleScroll}
+        >
+          {/* Folders Section */}
+          {folders.length > 0 && (
+            <div className="space-y-3">
+              <h2 className="text-xs font-semibold text-[#444746] dark:text-[#c4c7c5] tracking-wide block">
+                {folders.length > renderLimit
+                  ? t("browser.sections.foldersPartial", { shown: Math.min(folders.length, renderLimit), total: folders.length })
+                  : t("browser.sections.folders")}
+              </h2>
+              <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2 sm:gap-3 px-0.5">
+                {folders.slice(0, renderLimit).map((folder, index) => {
+                  const isSelected = selectedIdsSet.has(folder.id);
+                  const isBeingDragged = draggedId !== null && (draggedId === folder.id || (isSelected && selectedIdsSet.has(draggedId)));
+                  return (
+                    <FolderGridCard
+                      key={folder.id}
+                      folder={folder}
+                      index={index}
+                      isSelected={isSelected}
+                      isBeingDragged={isBeingDragged}
+                      isDragOver={dragOverId === folder.id}
+                      isDraggingActive={isDraggingActive}
+                      isMobile={isMobile}
+                      onItemClick={handleItemClick}
+                      onItemDoubleClick={handleItemDoubleClick}
+                      onPointerDown={handlePointerDown}
+                      onTouchStartItem={handleTouchStartItem}
+                      onTouchEndItem={handleTouchEndItem}
+                      onPreview={toastPreview}
+                      onEdit={handleEdit}
+                      onDownload={handleDownload}
+                      onRename={openRenameDialog}
+                      onStarToggle={toggleStar}
+                      onTrash={moveToTrash}
+                      onDeletePermanently={setDeleteTarget}
+                      onArchive={archiveFile}
+                      onUnarchive={unarchiveFile}
+                      onGetInfo={setInfoTarget}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Files Section */}
+          {regularFiles.length > 0 && (
+            <div className="space-y-3">
+              <h2 className="text-xs font-semibold text-[#444746] dark:text-[#c4c7c5] tracking-wide block">
+                {regularFiles.length > renderLimit
+                  ? t("browser.sections.filesPartial", { shown: Math.min(regularFiles.length, renderLimit), total: regularFiles.length })
+                  : t("browser.sections.files")}
+              </h2>
+              <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-2.5 sm:gap-4 px-0.5">
+                {regularFiles.slice(0, renderLimit).map((file, index) => {
+                  const isSelected = selectedIdsSet.has(file.id);
+                  const isBeingDragged =
+                    draggedId !== null && (draggedId === file.id || (isSelected && selectedIdsSet.has(draggedId)));
+                  const rawThumbSrc = file.thumbnailUrl || thumbUrls[file.id] || getCachedThumbnailUrl(file);
+                  const thumbSrc =
+                    rawThumbSrc && failedThumbSrcs[file.id] !== rawThumbSrc
+                      ? rawThumbSrc
+                      : undefined;
+                  return (
+                    <FileGridCard
+                      key={file.id}
+                      file={file}
+                      index={index}
+                      foldersCount={folders.length}
+                      isSelected={isSelected}
+                      isBeingDragged={isBeingDragged}
+                      isMobile={isMobile}
+                      thumbSrc={thumbSrc}
+                      formattedSize={formatFileSize(file.size)}
+                      formattedDate={formatShortDate(file.uploadedAt, i18n.language)}
+                      onItemClick={handleItemClick}
+                      onItemDoubleClick={handleItemDoubleClick}
+                      onPointerDown={handlePointerDown}
+                      onTouchStartItem={handleTouchStartItem}
+                      onTouchEndItem={handleTouchEndItem}
+                      onThumbError={handleThumbError}
+                      onPreview={toastPreview}
+                      onOpenInSystemApp={handleOpenSystemApp}
+                      onEdit={handleEdit}
+                      onDownload={handleDownload}
+                      onRename={openRenameDialog}
+                      onStarToggle={toggleStar}
+                      onTrash={moveToTrash}
+                      onDeletePermanently={setDeleteTarget}
+                      onArchive={archiveFile}
+                      onUnarchive={unarchiveFile}
+                      onOfflineToggle={toggleOffline}
+                      onGetInfo={setInfoTarget}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        /* LIST VIEW */
+        <div
+          ref={scrollContainerRef}
+          className="flex-1 overflow-y-auto min-h-0 select-none pb-20 border border-slate-200/80 dark:border-white/[0.04] rounded-2xl bg-white dark:bg-[#0a0a0a] shadow-xs"
+          onDragOver={handleGlobalDragOver}
+          onDrop={handleGlobalDrop}
+          onScroll={handleScroll}
+        >
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="border-b border-slate-200 dark:border-white/[0.04] text-[11px] font-semibold text-[#444746] dark:text-[#8e918f] select-none bg-slate-50/70 dark:bg-[#111214]/60">
+                <th className="py-3 px-4 w-12 text-center">
+                  <input
+                    type="checkbox"
+                    aria-label={t("browser.selectAll", "Select all items")}
+                    checked={selectedIds.length === displayFiles.length && displayFiles.length > 0}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedIds(displayFiles.map((f) => f.id));
+                      } else {
+                        clearSelection();
+                      }
+                    }}
+                    className="h-4 w-4 rounded-sm border-slate-300 dark:border-white/[0.1] text-[#0b57d0] focus:ring-[#0b57d0]/20 dark:bg-[#161719] transition-colors cursor-pointer"
+                  />
+                </th>
+                <th className="py-3 px-4 font-semibold w-full sm:w-auto">{t("browser.columns.name")}</th>
+                <th className="py-3 px-4 hidden sm:table-cell font-semibold">{t("browser.columns.type")}</th>
+                <th className="py-3 px-4 hidden md:table-cell font-semibold">{t("browser.columns.fileSize")}</th>
+                <th className="py-3 px-4 hidden lg:table-cell font-semibold">{t("browser.columns.lastModified")}</th>
+                <th className="py-3 px-4 w-14"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {displayFiles.slice(0, renderLimit).map((file, index) => {
+                const isSelected = selectedIdsSet.has(file.id);
+                const isDir = file.mime === "inode/directory" || file.mime === "application/x-directory";
+                const isBeingDragged =
+                  draggedId !== null && (draggedId === file.id || (isSelected && selectedIdsSet.has(draggedId)));
+                return (
+                  <FileListRow
+                    key={file.id}
+                    file={file}
+                    index={index}
+                    isDir={isDir}
+                    isSelected={isSelected}
+                    isBeingDragged={isBeingDragged}
+                    isDragOver={dragOverId === file.id}
+                    isMobile={isMobile}
+                    formattedSize={isDir ? "—" : formatFileSize(file.size)}
+                    formattedDateShort={formatShortDate(file.uploadedAt, i18n.language)}
+                    formattedDateFull={formatFullDate(file.uploadedAt, i18n.language)}
+                    fileTypeLabel={getFileType(file, t)}
+                    onToggleSelect={toggleSelect}
+                    onItemClick={handleItemClick}
+                    onItemDoubleClick={handleItemDoubleClick}
+                    onPointerDown={handlePointerDown}
+                    onTouchStartItem={handleTouchStartItem}
+                    onTouchEndItem={handleTouchEndItem}
+                    onPreview={toastPreview}
+                    onOpenInSystemApp={handleOpenSystemApp}
+                    onEdit={handleEdit}
+                    onDownload={handleDownload}
+                    onRename={openRenameDialog}
+                    onStarToggle={toggleStar}
+                    onTrash={moveToTrash}
+                    onDeletePermanently={setDeleteTarget}
+                    onArchive={archiveFile}
+                    onUnarchive={unarchiveFile}
+                    onOfflineToggle={toggleOffline}
+                    onGetInfo={setInfoTarget}
+                  />
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {internalDrag && typeof document !== "undefined" && createPortal(
+        <div
+          className="fixed z-50 pointer-events-none rounded-2xl shadow-2xl"
+          style={{
+            left: internalDrag.x - internalDrag.offsetX,
+            top: internalDrag.y - internalDrag.offsetY,
+            width: internalDrag.width,
+            height: internalDrag.height,
+          }}
+        >
+          {internalDrag.previewVariant === "folder-grid" ? (
+            <div className="h-full rounded-xl border border-brand-200/90 bg-white/96 dark:border-white/[0.06] dark:bg-[#141518]/96 backdrop-blur-md px-3.5 pr-3.5 flex items-center justify-between gap-3 shadow-[0_16px_32px_-20px_rgba(15,23,42,0.45)]">
+              <div className="flex items-center gap-3 min-w-0 flex-1">
+                <Folder className="h-5 w-5 text-brand-500 fill-brand-500/10 shrink-0 stroke-[1.5]" />
+                <span className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">
+                  {internalDrag.previewFile.name}
+                </span>
+              </div>
+              <MoreHorizontal className="h-4 w-4 text-slate-400 shrink-0" />
+            </div>
+          ) : internalDrag.previewVariant === "list-row" ? (
+            <div className="h-full rounded-xl border border-slate-200/90 dark:border-white/[0.06] bg-white/96 dark:bg-[#141518]/96 backdrop-blur-md flex items-center gap-3 px-4 shadow-[0_16px_32px_-20px_rgba(15,23,42,0.45)]">
+              <FileIcon
+                name={internalDrag.previewFile.name}
+                mime={internalDrag.previewFile.mime}
+                size="sm"
+                className="shrink-0"
+              />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-slate-800 dark:text-slate-100 truncate">
+                  {internalDrag.previewFile.name}
+                </p>
+                <p className="text-[10px] text-muted-foreground truncate">
+                  {internalDrag.ids.length > 1 ? t("browser.dragPreview.items", { count: internalDrag.ids.length }) : formatFileSize(internalDrag.previewFile.size)}
+                </p>
+              </div>
+              <MoreHorizontal className="h-4 w-4 text-slate-400 shrink-0" />
+            </div>
+          ) : (
+            <div className="h-full rounded-2xl border border-slate-200/80 dark:border-white/[0.06] bg-white/96 dark:bg-[#111214]/96 backdrop-blur-md overflow-hidden shadow-[0_20px_40px_-24px_rgba(15,23,42,0.5)]">
+              <div className="flex-1 h-[calc(100%-51px)] min-h-0 bg-slate-50/70 dark:bg-[#0a0a0a] flex items-center justify-center p-4 border-b border-slate-100 dark:border-white/[0.04]">
+                <FileIcon name={internalDrag.previewFile.name} mime={internalDrag.previewFile.mime} size="lg" />
+              </div>
+              <div className="h-[51px] px-3 py-2.5 bg-white/96 dark:bg-[#111214]/96">
+                <p className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">
+                  {internalDrag.previewFile.name}
+                </p>
+                <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
+                  {internalDrag.ids.length > 1 ? t("browser.dragPreview.items", { count: internalDrag.ids.length }) : formatFileSize(internalDrag.previewFile.size)}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>,
+        document.body,
+      )}
+
+      {/* Floating Bulk Action Bar */}
+      {selectedIds.length > 0 && (
+        <div className="fixed bottom-[calc(var(--mobile-nav-height)+var(--safe-area-bottom,0px)+16px)] md:bottom-6 left-1/2 transform -translate-x-1/2 z-50 flex items-center gap-2.5 sm:gap-4 max-w-[calc(100vw-1.5rem)] bg-white/95 dark:bg-[#141518]/95 text-[#1f1f1f] dark:text-[#e3e3e3] px-3.5 sm:px-5 py-2 sm:py-2.5 rounded-full shadow-2xl border border-slate-300/80 dark:border-white/[0.06] backdrop-blur-md animate-slide-up select-none">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold bg-[#0b57d0] dark:bg-[#a8c7fa] px-2.5 py-0.5 rounded-full text-white dark:text-[#003258]">{selectedIds.length}</span>
+            <span className="text-xs font-medium whitespace-nowrap text-[#1f1f1f] dark:text-[#e3e3e3]">{t("browser.bulkBar.selected", { count: selectedIds.length })}</span>
+          </div>
+          <div className="h-4 w-px bg-slate-300/80 dark:bg-white/[0.06]" />
+          
+          <div className="flex items-center gap-1.5">
+            {mode === "trash" ? (
+              <>
+                <button
+                  type="button"
+                  onClick={handleBulkRestore}
+                  className="h-8.5 w-8.5 rounded-full flex items-center justify-center text-[#444746] dark:text-[#c4c7c5] hover:text-[#0b57d0] dark:hover:text-[#a8c7fa] hover:bg-[#f0f4f9] dark:hover:bg-[#1f2124] transition-colors cursor-pointer border-0 bg-transparent outline-none"
+                  title={t("browser.bulkBar.restoreSelected")}
+                >
+                  <RotateCcw className="h-4.5 w-4.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBulkDelete}
+                  className="h-8.5 w-8.5 rounded-full flex items-center justify-center text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors cursor-pointer border-0 bg-transparent outline-none"
+                  title={t("browser.bulkBar.deletePermanently")}
+                >
+                  <Trash2 className="h-4.5 w-4.5" />
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={handleBulkDownload}
+                  className="h-8.5 w-8.5 rounded-full flex items-center justify-center text-[#444746] dark:text-[#c4c7c5] hover:text-[#0b57d0] dark:hover:text-[#a8c7fa] hover:bg-[#f0f4f9] dark:hover:bg-[#1f2124] transition-colors cursor-pointer border-0 bg-transparent outline-none"
+                  title={t("browser.bulkBar.downloadSelected", "Download selected")}
+                >
+                  <Download className="h-4.5 w-4.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBulkTrash}
+                  className="h-8.5 w-8.5 rounded-full flex items-center justify-center text-[#444746] dark:text-[#c4c7c5] hover:text-red-600 dark:hover:text-red-400 hover:bg-[#f0f4f9] dark:hover:bg-[#1f2124] transition-colors cursor-pointer border-0 bg-transparent outline-none"
+                  title={t("browser.bulkBar.moveSelectedToTrash")}
+                >
+                  <Trash2 className="h-4.5 w-4.5" />
+                </button>
+              </>
+            )}
+            
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="h-8.5 w-8.5 rounded-full flex items-center justify-center text-[#747775] dark:text-[#8e918f] hover:text-[#1f1f1f] dark:hover:text-[#e3e3e3] hover:bg-[#f0f4f9] dark:hover:bg-[#1f2124] transition-colors cursor-pointer border-0 bg-transparent outline-none"
+              title={t("browser.bulkBar.clearSelection")}
+            >
+              <X className="h-4.5 w-4.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* dialog for creating folder */}
+      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+        <DialogContent className="rounded-2xl sm:rounded-3xl max-w-sm sm:max-w-md p-6 bg-white dark:bg-[#0e1015] border border-slate-200/90 dark:border-white/[0.08] shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">{t("browser.dialogs.createFolder.title")}</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleCreateFolderSubmit} className="space-y-5 pt-2">
+            <Input
+              value={newFolderName}
+              onChange={(e) => setNewFolderName(e.target.value)}
+              placeholder={t("browser.dialogs.createFolder.placeholder")}
+              autoFocus
+              className="rounded-xl h-11 px-3.5 border-slate-300 dark:border-white/[0.08] bg-white dark:bg-[#060709] text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-[#6e7170] focus-visible:ring-2 focus-visible:ring-[#0b57d0]/40 dark:focus-visible:ring-[#1a73e8]/40"
+            />
+            <DialogFooter className="gap-2 justify-end">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setCreateDialogOpen(false)}
+                className="rounded-xl h-9.5 px-4 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] cursor-pointer"
+              >
+                {t("browser.dialogs.cancel")}
+              </Button>
+              <Button
+                type="submit"
+                disabled={!newFolderName.trim()}
+                className="rounded-xl h-9.5 px-5 bg-[#0b57d0] hover:bg-[#0842a0] dark:bg-blue-600 dark:hover:bg-blue-500 text-white text-xs font-semibold shadow-sm cursor-pointer border-0 disabled:opacity-40"
+              >
+                {t("browser.dialogs.createFolder.submit")}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* dialog for renaming file */}
+      <Dialog open={renameDialogOpen} onOpenChange={setRenameDialogOpen}>
+        <DialogContent className="rounded-2xl sm:rounded-3xl max-w-sm sm:max-w-md p-6 bg-white dark:bg-[#0e1015] border border-slate-200/90 dark:border-white/[0.08] shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">{t("browser.dialogs.rename.title")}</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleRenameSubmit} className="space-y-5 pt-2">
+            <Input
+              value={newFileName}
+              onChange={(e) => setNewFileName(e.target.value)}
+              placeholder={t("browser.dialogs.rename.placeholder")}
+              autoFocus
+              className="rounded-xl h-11 px-3.5 border-slate-300 dark:border-white/[0.08] bg-white dark:bg-[#060709] text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-[#6e7170] focus-visible:ring-2 focus-visible:ring-[#0b57d0]/40 dark:focus-visible:ring-[#1a73e8]/40"
+            />
+            <DialogFooter className="gap-2 justify-end">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setRenameDialogOpen(false)}
+                className="rounded-xl h-9.5 px-4 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] cursor-pointer"
+              >
+                {t("browser.dialogs.cancel")}
+              </Button>
+              <Button
+                type="submit"
+                disabled={!newFileName.trim()}
+                className="rounded-xl h-9.5 px-5 bg-[#0b57d0] hover:bg-[#0842a0] dark:bg-blue-600 dark:hover:bg-blue-500 text-white text-xs font-semibold shadow-sm cursor-pointer border-0 disabled:opacity-40"
+              >
+                {t("browser.dialogs.rename.submit")}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Mobile Context Menu Bottom Sheet */}
+      {isMobile && (
+        <Sheet open={!!mobileContextFile} onOpenChange={(open) => !open && setMobileContextFile(null)}>
+          <SheetContent side="bottom" className="rounded-t-2xl px-4 sm:px-6 pt-5 pb-[calc(var(--safe-area-bottom,0px)+1rem)] max-h-[85dvh] overflow-y-auto bg-white dark:bg-[#0d0e11] border-t dark:border-white/[0.08]">
+            {mobileContextFile && (
+              <div className="space-y-4 select-none">
+                <div className="flex items-center gap-3 border-b dark:border-white/[0.04] pb-3">
+                  <FileIcon name={mobileContextFile.name} mime={mobileContextFile.mime} size="sm" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-slate-800 dark:text-slate-100 truncate">
+                      {mobileContextFile.name}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {mobileContextFile.mime === "inode/directory" || mobileContextFile.mime === "application/x-directory"
+                        ? t("browser.fileType.folder")
+                        : formatFileSize(mobileContextFile.size)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-1 pb-6">
+                  {mobileContextFile.mime !== "inode/directory" && mobileContextFile.mime !== "application/x-directory" && !mobileContextFile.trashed && (
+                    <button
+                      onClick={() => {
+                        setMobileContextFile(null);
+                        toastPreview(mobileContextFile);
+                      }}
+                      className="flex items-center gap-3 px-3 py-3 text-sm rounded-xl hover:bg-slate-100 dark:hover:bg-[#1f2124] text-left font-semibold text-slate-700 dark:text-slate-200 border-0 cursor-pointer w-full bg-transparent"
+                    >
+                      <Eye className="h-4 w-4 text-slate-500" />
+                      <span>{t("menu.preview")}</span>
+                    </button>
+                  )}
+                  {mobileContextFile.mime !== "inode/directory" && mobileContextFile.mime !== "application/x-directory" && !mobileContextFile.trashed && isEditableFile(mobileContextFile) && (
+                    <button
+                      onClick={() => {
+                        const f = mobileContextFile;
+                        setMobileContextFile(null);
+                        handleEdit(f);
+                      }}
+                      className="flex items-center gap-3 px-3 py-3 text-sm rounded-xl hover:bg-slate-100 dark:hover:bg-[#1f2124] text-left font-semibold text-slate-700 dark:text-slate-200 border-0 cursor-pointer w-full bg-transparent"
+                    >
+                      <Edit2 className="h-4 w-4 text-slate-500" />
+                      <span>{t("menu.edit")}</span>
+                    </button>
+                  )}
+                  {mobileContextFile.mime !== "inode/directory" && mobileContextFile.mime !== "application/x-directory" && !mobileContextFile.trashed && (
+                    <button
+                      onClick={() => {
+                        setMobileContextFile(null);
+                        handleDownload(mobileContextFile);
+                      }}
+                      className="flex items-center gap-3 px-3 py-3 text-sm rounded-xl hover:bg-slate-100 dark:hover:bg-[#1f2124] text-left font-semibold text-slate-700 dark:text-slate-200 border-0 cursor-pointer w-full bg-transparent"
+                    >
+                      <Download className="h-4 w-4 text-slate-500" />
+                      <span>{t("menu.download")}</span>
+                    </button>
+                  )}
+                  {mobileContextFile.mime !== "inode/directory" && mobileContextFile.mime !== "application/x-directory" && !mobileContextFile.trashed && (
+                    <button
+                      onClick={() => {
+                        const f = mobileContextFile;
+                        setMobileContextFile(null);
+                        toggleOffline(f);
+                      }}
+                      className="flex items-center justify-between px-3 py-3 text-sm rounded-xl hover:bg-slate-100 dark:hover:bg-[#1f2124] text-left font-semibold text-slate-700 dark:text-slate-200 border-0 cursor-pointer w-full bg-transparent"
+                    >
+                      <div className="flex items-center gap-3">
+                        <CheckCircle className={`h-4 w-4 ${mobileContextFile.offline ? "text-green-500 fill-green-500/20" : "text-slate-500"}`} />
+                        <span>{t("menu.availableOffline")}</span>
+                      </div>
+                      {mobileContextFile.offline && <Check className="h-4 w-4 text-green-500 shrink-0" />}
+                    </button>
+                  )}
+                  {!mobileContextFile.trashed && (
+                    <button
+                      onClick={() => {
+                        setMobileContextFile(null);
+                        openRenameDialog(mobileContextFile);
+                      }}
+                      className="flex items-center gap-3 px-3 py-3 text-sm rounded-xl hover:bg-slate-100 dark:hover:bg-[#1f2124] text-left font-semibold text-slate-700 dark:text-slate-200 border-0 cursor-pointer w-full bg-transparent"
+                    >
+                      <Edit2 className="h-4 w-4 text-slate-500" />
+                      <span>{t("menu.rename")}</span>
+                    </button>
+                  )}
+                  {!mobileContextFile.trashed && (
+                    <button
+                      onClick={() => {
+                        setMobileContextFile(null);
+                        toggleStar(mobileContextFile);
+                      }}
+                      className="flex items-center gap-3 px-3 py-3 text-sm rounded-xl hover:bg-slate-100 dark:hover:bg-[#1f2124] text-left font-semibold text-slate-700 dark:text-slate-200 border-0 cursor-pointer w-full bg-transparent"
+                    >
+                      <Star className={`h-4 w-4 ${mobileContextFile.starred ? "fill-amber-400 text-amber-400" : "text-slate-500"}`} />
+                      <span>{mobileContextFile.starred ? t("browser.mobileMenu.removeFromStarred") : t("browser.mobileMenu.addToStarred")}</span>
+                    </button>
+                  )}
+                  {mobileContextFile.trashed ? (
+                    <button
+                      onClick={async () => {
+                        setMobileContextFile(null);
+                        await restoreFromTrash(mobileContextFile);
+                      }}
+                      className="flex items-center gap-3 px-3 py-3 text-sm rounded-xl hover:bg-slate-100 dark:hover:bg-[#1f2124] text-left font-semibold text-slate-700 dark:text-slate-200 border-0 cursor-pointer w-full bg-transparent"
+                    >
+                      <RotateCcw className="h-4 w-4 text-slate-500" />
+                      <span>{t("menu.restore")}</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={async () => {
+                        setMobileContextFile(null);
+                        await moveToTrash(mobileContextFile);
+                      }}
+                      className="flex items-center gap-3 px-3 py-3 text-sm rounded-xl hover:bg-red-50 dark:hover:bg-red-950/20 text-left font-semibold text-red-600 dark:text-red-400 border-0 cursor-pointer w-full bg-transparent"
+                    >
+                      <Trash2 className="h-4 w-4 text-slate-500" />
+                      <span>{t("menu.moveToTrash")}</span>
+                    </button>
+                  )}
+                  {mobileContextFile.trashed && (
+                    <button
+                      onClick={() => {
+                        const f = mobileContextFile;
+                        setMobileContextFile(null);
+                        setDeleteTarget(f);
+                      }}
+                      className="flex items-center gap-3 px-3 py-3 text-sm rounded-xl hover:bg-red-50 dark:hover:bg-red-950/20 text-left font-semibold text-red-600 dark:text-red-400 border-0 cursor-pointer w-full bg-transparent"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      <span>{t("menu.deletePermanently")}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </SheetContent>
+        </Sheet>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Empty Trash confirmation dialog (replaces window.confirm)           */}
+      {/* ------------------------------------------------------------------ */}
+      <Dialog open={emptyTrashDialogOpen} onOpenChange={setEmptyTrashDialogOpen}>
+        <DialogContent className="rounded-2xl sm:rounded-3xl max-w-sm sm:max-w-md p-6 bg-white dark:bg-[#0e1015] border border-slate-200/90 dark:border-white/[0.08] shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base sm:text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Trash2 className="h-4.5 w-4.5 text-red-600" />
+              {t("browser.dialogs.emptyTrash.title")}
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed mt-1">
+            <Trans
+              t={t}
+              i18nKey="browser.dialogs.emptyTrash.description"
+              count={displayFiles.length}
+              components={{ strong: <strong /> }}
+            />
+          </p>
+          <DialogFooter className="mt-5 flex gap-2 justify-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="rounded-xl h-9.5 px-4 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] cursor-pointer"
+              onClick={() => setEmptyTrashDialogOpen(false)}
+            >
+              {t("browser.dialogs.cancel")}
+            </Button>
+            <Button
+              size="sm"
+              disabled={isOperating}
+              className="rounded-xl h-9.5 px-5 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white shadow-sm cursor-pointer border-0"
+              onClick={async () => {
+                setEmptyTrashDialogOpen(false);
+                await emptyTrash();
+                clearSelection();
+              }}
+            >
+              {isOperating ? t("browser.dialogs.deleting") : t("browser.dialogs.emptyTrash.confirm")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Individual item permanent delete confirmation dialog               */}
+      {/* ------------------------------------------------------------------ */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent className="rounded-2xl sm:rounded-3xl max-w-sm sm:max-w-md p-6 bg-white dark:bg-[#0e1015] border border-slate-200/90 dark:border-white/[0.08] shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base sm:text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Trash2 className="h-4.5 w-4.5 text-red-600" />
+              {t("browser.dialogs.deleteItem.title")}
+            </DialogTitle>
+          </DialogHeader>
+          {deleteTarget && (
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed mt-1">
+              <Trans
+                t={t}
+                i18nKey={
+                  deleteTarget.mime !== "inode/directory" && deleteTarget.mime !== "application/x-directory"
+                    ? "browser.dialogs.deleteItem.descriptionFile"
+                    : "browser.dialogs.deleteItem.descriptionFolder"
+                }
+                values={{ name: deleteTarget.name }}
+                components={{ strong: <strong /> }}
+              />
+            </p>
+          )}
+          <DialogFooter className="mt-5 flex gap-2 justify-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="rounded-xl h-9.5 px-4 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] cursor-pointer"
+              onClick={() => setDeleteTarget(null)}
+            >
+              {t("browser.dialogs.cancel")}
+            </Button>
+            <Button
+              size="sm"
+              disabled={isOperating}
+              className="rounded-xl h-9.5 px-5 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white shadow-sm cursor-pointer border-0"
+              onClick={async () => {
+                if (deleteTarget) {
+                  const targetId = deleteTarget.id;
+                  setDeleteTarget(null);
+                  await deletePermanently(targetId);
+                }
+              }}
+            >
+              {isOperating ? t("browser.dialogs.deleting") : t("browser.dialogs.deleteForever")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* ------------------------------------------------------------------ */}
+      {/* Bulk permanent delete confirmation dialog                           */}
+      {/* ------------------------------------------------------------------ */}
+      <Dialog open={bulkDeleteDialogOpen} onOpenChange={setBulkDeleteDialogOpen}>
+        <DialogContent className="rounded-2xl sm:rounded-3xl max-w-sm sm:max-w-md p-6 bg-white dark:bg-[#0e1015] border border-slate-200/90 dark:border-white/[0.08] shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base sm:text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Trash2 className="h-4.5 w-4.5 text-red-600" />
+              {t("browser.dialogs.bulkDelete.title")}
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed mt-1">
+            <Trans
+              t={t}
+              i18nKey="browser.dialogs.bulkDelete.description"
+              count={selectedIds.length}
+              components={{ strong: <strong /> }}
+            />
+          </p>
+          <DialogFooter className="mt-5 flex gap-2 justify-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="rounded-xl h-9.5 px-4 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] cursor-pointer"
+              onClick={() => setBulkDeleteDialogOpen(false)}
+            >
+              {t("browser.dialogs.cancel")}
+            </Button>
+            <Button
+              size="sm"
+              disabled={isOperating}
+              className="rounded-xl h-9.5 px-5 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white shadow-sm cursor-pointer border-0"
+              onClick={confirmBulkDelete}
+            >
+              {isOperating ? t("browser.dialogs.deleting") : t("browser.dialogs.deleteForever")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* File / Folder Get Info Dialog */}
+      <FileInfoDialog
+        file={infoTarget}
+        allFiles={files}
+        open={infoTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setInfoTarget(null);
+        }}
+      />
+    </div>
+  );
+}

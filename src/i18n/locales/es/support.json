@@ -1,0 +1,24 @@
+{
+  "starPrompt": {
+    "title": "¿Disfrutando de TeleDrive? ✨",
+    "description": "Si TeleDrive te ha ahorrado tiempo o costes de almacenamiento, dejar una ⭐ en GitHub ayuda a que más personas lo descubran y mantiene el proyecto vivo.",
+    "starButton": "⭐ Destacar en GitHub",
+    "maybeLater": "Quizás más tarde",
+    "dontAskAgain": "No volver a preguntar"
+  },
+  "whatsNew": {
+    "title": "Novedades en TeleDrive",
+    "badge": "v{{version}}",
+    "features": [
+      "Bóveda Segura Multicuenta — Almacenamiento aislado automáticamente por cuenta en metadatos y dispositivo",
+      "Transferencias >2/4 GB reanudables — Puntos de control, división automática y deduplicación SHA-256 sin resubida",
+      "Inicio instantáneo y 3× pipelining — Caché IndexedDB, Catálogo v3 y descargas MTProto en paralelo",
+      "Vista previa universal y miniaturas — DOCX, ODT, RTF, EPUB, XLSX/ODS, PPTX/ODP, ZIP/TAR, HTML y miniaturas PDF/vídeo",
+      "Sincronización multiplataforma refinada — Rendimiento optimizado en Tauri v2 con soporte para 11 idiomas"
+    ],
+    "starCta": "¿Te gusta la actualización? Danos una ⭐",
+    "starButton": "⭐ Destacar en GitHub",
+    "close": "Cerrar",
+    "subtitle": "Novedades en TeleDrive v0.1.4"
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "common": {
+    "unknownError": "Unknown error"
+  },
+  "bootstrap": {
+    "status": {
+      "connecting": "Connecting to Telegram...",
+      "verifyingChannel": "Verifying secure storage channel...",
+      "loadingIndex": "Loading file metadata index...",
+      "recoveryScan": "Verifying your files (recovery scan)...",
+      "initializingView": "Initializing local storage view...",
+      "indexIncomplete": "Couldn't verify the drive index — changes are paused."
+    }
+  },
+  "indexLoad": {
+    "bannerTitle": "Drive index temporarily unavailable",
+    "bannerBodyCached": "Showing your cached files. The index will be verified automatically — uploads are paused until it succeeds.",
+    "bannerBodyEmpty": "TeleDrive couldn't reach or verify the drive index. This is usually a temporary network issue. Tap Retry to try again.",
+    "retry": "Retry",
+    "retrying": "Retrying...",
+    "changesPaused": "The drive index isn't ready yet. Changes are paused.",
+    "reason": {
+      "not_found": "The index could not be assembled from available channel messages.",
+      "partial_manifest": "The newest index is incomplete — some chunk messages may be missing.",
+      "timeout": "Telegram took too long to respond. Check your connection.",
+      "network": "The storage channel couldn't be reached. Check your internet connection."
+    }
+  },
+  "backup": {
+    "errors": {
+      "noFolders": "Pick at least one folder in Settings → Device Backup first.",
+      "channelNotReady": "Storage channel is not ready. Please complete first login.",
+      "clientUnreachable": "Telegram client unreachable: {{message}}",
+      "walkerFailed": "Walker failed: {{message}}",
+      "manifestCorrupt": "Backup manifest is corrupt — refusing to upload until reviewed.",
+      "rateLimited": "Telegram asked to pause uploads for about {{minutes}} min. The remaining files will be retried later.",
+      "cancelled": "Cancelled by user.",
+      "sessionExpired": "Telegram session expired. Reconnect your account in Settings → Telegram Account, then run the backup again."
+    }
+  },
+  "upload": {
+    "channelNotConfigured": "Telegram storage channel is not configured. Please check settings.",
+    "success": "\"{{name}}\" uploaded successfully!",
+    "indexSaveFailed": "Index save failed for \"{{name}}\" — refresh the drive.",
+    "failedFallback": "Upload failed",
+    "failed": "Failed to upload \"{{name}}\": {{message}}",
+    "emptyFile": "\"{{name}}\" is empty. Empty files (0 bytes) are not supported by Telegram.",
+    "exceedsFreeLimit": "\"{{name}}\" exceeds Telegram's ~2 GB upload limit for standard accounts (Telegram Premium supports up to ~4 GB).",
+    "exceedsPremiumLimit": "\"{{name}}\" exceeds Telegram's ~4 GB single-file upload limit.",
+    "duplicateSkipped": "\"{{name}}\" already exists in this folder with identical content."
+  },
+  "download": {
+    "cancelled": "Download cancelled.",
+    "progress": "Downloading \"{{name}}\"... {{percent}}%",
+    "success": "\"{{name}}\" downloaded successfully!",
+    "failed": "Failed to download file. Please check permissions and try again.",
+    "errors": {
+      "mediaNotFound": "Target file message or media not found on Telegram.",
+      "mediaFailed": "Failed to download media."
+    },
+    "zipEmpty": "No downloadable files found in the selection.",
+    "zipSuccess": "\"{{name}}\" saved successfully!",
+    "zipFailed": "Failed to create ZIP archive."
+  },
+  "indexQueue": {
+    "rateLimitRetrying": "Telegram rate limit — retrying"
+  },
+  "storage": {
+    "saveFailed": "Unable to save file to {{path}}. Please check storage permissions."
+  },
+  "relativeTime": {
+    "unknown": "unknown",
+    "justNow": "just now",
+    "second_one": "{{count}} second",
+    "second_other": "{{count}} seconds",
+    "minute_one": "{{count}} minute",
+    "minute_other": "{{count}} minutes",
+    "hour_one": "{{count}} hour",
+    "hour_other": "{{count}} hours",
+    "day_one": "{{count}} day",
+    "day_other": "{{count}} days",
+    "month_one": "{{count}} month",
+    "month_other": "{{count}} months",
+    "year_one": "{{count}} year",
+    "year_other": "{{count}} years"
+  }
+}

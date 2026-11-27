@@ -1,0 +1,24 @@
+{
+  "starPrompt": {
+    "title": "TeleDrive を楽しんでいますか？ ✨",
+    "description": "TeleDrive で時間やストレージコストを節約できたなら、GitHub に ⭐ を付けることで、より多くの人が発見しやすくなり、プロジェクトの継続に役立ちます。",
+    "starButton": "⭐ GitHub でスターを付ける",
+    "maybeLater": "後で",
+    "dontAskAgain": "今後表示しない"
+  },
+  "whatsNew": {
+    "title": "TeleDrive の新機能",
+    "badge": "v{{version}}",
+    "features": [
+      "強化されたマルチアカウント Vault — アカウントごとの安全な鍵分離と高信頼メタデータ管理",
+      ">2/4 GB 分割転送とチェックポイント再開 — 自動セグメント分割と SHA-256 重複排除",
+      "高速起動と 3並列パイプライン転送 — IndexedDB キャッシュ、Catalog v3、並列 MTProto ダウンロード",
+      "汎用プレビューとサムネイル表示 — DOCX/ODT/RTF/EPUB、XLSX/ODS、PPTX/ODP、ZIP/TAR、HTML、PDF・動画サムネイル対応",
+      "クロスプラットフォーム同期の最適化 — Tauri v2 の性能向上と 11言語フル対応"
+    ],
+    "starCta": "アップデートを気に入っていただけましたか？ ⭐ をお願いします",
+    "starButton": "⭐ GitHub でスターを付ける",
+    "close": "閉じる",
+    "subtitle": "TeleDrive v0.1.4 の新機能"
+  }
+}

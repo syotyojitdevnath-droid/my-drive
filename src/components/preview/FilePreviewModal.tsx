@@ -1,0 +1,3286 @@
+/**
+ * FilePreviewModal.tsx
+ * Full-screen file preview + editor modal.
+ * Fully theme-aware: adapts topbar, status bar, surfaces, and text to dark/light.
+ *
+ * Read mode  → SyntaxHighlighter (highlight.js, lazy, theme-aware)
+ * Edit mode  → CodeEditor (CodeMirror 6, lazy, theme-aware via Compartment)
+ * Binary     → native <img>, <video>, <audio>, <iframe>
+ */
+import { useState, useEffect, useCallback, useMemo, useRef, Component, ReactNode } from "react";
+import { logger } from "@/lib/logger";
+import {
+  X,
+  Download,
+  Loader2,
+  File as FallbackIcon,
+  Pencil,
+  Save,
+  X as XIcon,
+  CheckCircle2,
+  FileCode2,
+  FileText,
+  Image as ImageIcon,
+  Film,
+  Music,
+  FileSpreadsheet,
+  ExternalLink,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+  RotateCw,
+  Grid3X3,
+  Info,
+  Play,
+  Pause,
+  Volume2,
+  VolumeX,
+  Maximize,
+  Minimize,
+  SkipForward,
+  SkipBack,
+  Eye,
+  Code,
+  Copy,
+  Check,
+  WrapText,
+  FolderArchive,
+  Sparkles,
+  FileJson,
+  Type,
+  MoreVertical,
+} from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { TeleFile } from "@/lib/types";
+import {
+  downloadFileToBuffer,
+  downloadFileFromTelegram,
+  downloadFilePrefixToBuffer,
+  streamFileToLocalPath,
+} from "@/lib/telegram/downloader";
+import { updateFileLocal, deleteTelegramMessage } from "@/lib/storage/metadataStore";
+import {
+  isHashedUploadResult,
+  uploadFileToTelegram,
+} from "@/lib/telegram/uploader";
+import { EncryptionError } from "@/lib/secure/e2ee";
+import { getFileMessageIds } from "@/lib/files/segmentHelpers";
+import { enqueueSave } from "@/lib/storage/indexQueue";
+import {
+  readOfflineCache,
+  getOfflineFilePath,
+  isCachedOffline,
+} from "@/lib/storage/offlineStorage";
+import { saveBinaryFile } from "@/lib/storage/safeFileWriter";
+import { useFileStore } from "@/stores/fileStore";
+import { Button } from "@/components/ui/button";
+import { marked } from "marked";
+import { isEditableFile } from "@/lib/files/editableTypes";
+import {
+  IMAGE_EXTS,
+  VIDEO_EXTS,
+  AUDIO_EXTS,
+  ARCHIVE_EXTS,
+  UNRENDERABLE_IMAGE_EXTS,
+  NON_PREVIEWABLE_BINARY_EXTS,
+  RICH_DOCUMENT_EXTS,
+  SPREADSHEET_WORKBOOK_EXTS,
+  PRESENTATION_EXTS,
+  INSPECTABLE_ARCHIVE_EXTS,
+  decodeTextBuffer,
+  getMediaMimeType,
+} from "@/lib/files/fileUtils";
+import {
+  extractDocumentPreview,
+  extractPresentationSlides,
+  extractSpreadsheetSheets,
+  inspectArchiveEntries,
+  type ArchiveEntryInfo,
+  type ExtractedSlide,
+  type ExtractedSpreadsheetSheet,
+} from "@/lib/files/richPreviewExtractors";
+import { sanitizePreviewHtml } from "@/lib/files/sanitizeHtml";
+import { detectLang } from "@/lib/files/langDetect";
+import { useDarkMode } from "@/hooks/useDarkMode";
+import { SyntaxHighlighter } from "./SyntaxHighlighter";
+import { CodeEditor } from "./CodeEditor";
+import { CsvTableViewer } from "./CsvTableViewer";
+import { PdfViewer } from "./PdfViewer";
+import { RichDocumentSheet } from "./RichDocumentSheet";
+import { ArchiveExplorer } from "./ArchiveExplorer";
+import { toast } from "sonner";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  getCachedImageUrl,
+  putCachedImage,
+  isCachedImageUrl,
+  pinImageUrl,
+  prefetchImage,
+  isBrowserImage,
+} from "@/lib/preview/imageCache";
+import { getCachedThumbnailUrl } from "@/lib/files/thumbnails";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+
+// ─── PDF-specific Error Boundary (isolates PDF crashes from the rest of the modal)
+class PdfErrorBoundary extends Component<{ children: ReactNode; onRetry?: () => void }, { hasError: boolean }> {
+  state = { hasError: false };
+  static getDerivedStateFromError() { return { hasError: true }; }
+  componentDidCatch(err: Error) { logger.error("[PdfErrorBoundary] PDF viewer crashed:", err); }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-[#1a1b1e] text-white p-6 text-center select-none">
+          <div className="w-14 h-14 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 mb-4">
+            <svg className="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" /></svg>
+          </div>
+          <h3 className="text-base font-semibold mb-2">{i18n.t("preview:pdfErrorBoundary.title")}</h3>
+          <p className="text-sm text-slate-400 mb-5">{i18n.t("preview:pdfErrorBoundary.description")}</p>
+          <button
+            onClick={() => { this.setState({ hasError: false }); this.props.onRetry?.(); }}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm transition-colors cursor-pointer"
+          >
+            {i18n.t("preview:pdfErrorBoundary.retry")}
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+import { isWebRuntime, runtimeOpenUrl } from "../../lib/runtime/bridge";
+
+// ─── O2 Code Editor — runnable language map ────────────────────────────────
+// Maps our hljsLang alias → O2's route value.
+// Only languages O2 can actually execute/render are listed here.
+const O2_LANG_MAP: Record<string, string> = {
+  python:     "python",
+  javascript: "javascript",
+  typescript: "typescript",
+  cpp:        "cpp",
+  c:          "c",
+  java:       "java",
+  rust:       "rust",
+  go:         "go",
+  php:        "php",
+  ruby:       "ruby",
+  sql:        "sql",
+  html:       "html",
+};
+
+// ─── File-type icon ────────────────────────────────────────────────────────
+
+function FileTypeIcon({ mime, name }: { mime: string; name: string }) {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  const isPdf = ext === "pdf" || mime === "application/pdf" || (mime && mime.toLowerCase().includes("pdf"));
+  if (isPdf) return <FileText className="h-4 w-4 text-red-500 shrink-0" />;
+  if (mime.startsWith("image/") || ext === "svg" || IMAGE_EXTS.has(ext)) return <ImageIcon className="h-4 w-4 text-purple-500 shrink-0" />;
+  if (mime.startsWith("video/") || VIDEO_EXTS.has(ext)) return <Film className="h-4 w-4 text-pink-500 shrink-0" />;
+  if (mime.startsWith("audio/") || AUDIO_EXTS.has(ext)) return <Music className="h-4 w-4 text-teal-500 shrink-0" />;
+  if (["csv", "tsv", "xls", "xlsx", "ods"].includes(ext)) return <FileSpreadsheet className="h-4 w-4 text-emerald-500 shrink-0" />;
+  if (ARCHIVE_EXTS.has(ext)) return <FolderArchive className="h-4 w-4 text-amber-500 shrink-0" />;
+  if (["json", "jsonc", "json5"].includes(ext)) return <FileJson className="h-4 w-4 text-yellow-500 shrink-0" />;
+  if (["md", "markdown"].includes(ext) || RICH_DOCUMENT_EXTS.has(ext) || PRESENTATION_EXTS.has(ext)) return <FileText className="h-4 w-4 text-blue-500 shrink-0" />;
+  if (isEditableFile({ mime, name } as TeleFile)) return <FileCode2 className="h-4 w-4 text-blue-500 shrink-0" />;
+  return <FileText className="h-4 w-4 text-slate-400 shrink-0" />;
+}
+
+function formatSize(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+}
+
+function formatTime(seconds: number): string {
+  if (isNaN(seconds)) return "00:00";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  if (h > 0) return `${h}:${pad(m)}:${pad(s)}`;
+  return `${pad(m)}:${pad(s)}`;
+}
+
+// ─── Props ────────────────────────────────────────────────────────────────
+
+interface Props {
+  file: TeleFile | null;
+  initialEditMode?: boolean;
+  onClose: () => void;
+  onFileUpdate?: (updated: TeleFile) => void;
+}
+
+// ─── Component ────────────────────────────────────────────────────────────
+
+export function FilePreviewModal({ file, initialEditMode = false, onClose, onFileUpdate }: Props) {
+  const { t } = useTranslation("preview");
+  const isDark = useDarkMode();
+
+  const [activeFile, setActiveFile] = useState<TeleFile | null>(file);
+
+  useEffect(() => {
+    setActiveFile(file);
+  }, [file]);
+
+  const currentFile = activeFile ?? file;
+
+  // ── Download / load state ────────────────────────────────────────────────
+  const [loading, setLoading]         = useState(false);
+  const [progress, setProgress]       = useState(0);
+  const [error, setError]             = useState<string | null>(null);
+  const [contentUrl, setContentUrl]   = useState<string | null>(null);
+  const [textContent, setTextContent] = useState<string | null>(null);
+  const [textEncoding, setTextEncoding] = useState<string>("UTF-8");
+  const [markdownHtml, setMarkdownHtml] = useState<string | null>(null);
+  const [richDocHtml, setRichDocHtml] = useState<string | null>(null);
+  const [workbookSheets, setWorkbookSheets] = useState<ExtractedSpreadsheetSheet[] | null>(null);
+  const [activeSheetIdx, setActiveSheetIdx] = useState(0);
+  const [presentationSlides, setPresentationSlides] = useState<ExtractedSlide[] | null>(null);
+  const [archiveEntries, setArchiveEntries] = useState<ArchiveEntryInfo[] | null>(null);
+
+  // ── Multi-format View Mode states ───────────────────────────────────────
+  const [mdViewMode, setMdViewMode]     = useState<"preview" | "source">("preview");
+  const [htmlViewMode, setHtmlViewMode] = useState<"preview" | "source">("preview");
+  const [csvViewMode, setCsvViewMode]   = useState<"table" | "source">("table");
+  const [svgViewMode, setSvgViewMode]   = useState<"image" | "code">("image");
+  const [wrapLines, setWrapLines]       = useState(false);
+  const [codeFontSize, setCodeFontSize] = useState(13);
+  const [copiedCode, setCopiedCode]     = useState(false);
+
+  // ── Edit state ──────────────────────────────────────────────────────────
+  const [isEditMode, setIsEditMode]   = useState(false);
+  const [editContent, setEditContent] = useState("");
+  const [isSaving, setIsSaving]       = useState(false);
+  const [saveStatus, setSaveStatus]   = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [cursorPos, setCursorPos]     = useState({ line: 1, col: 1 });
+
+  // ── Image preview states ──────────────────────────────────────────────────
+  const [zoom, setZoom]               = useState(1);
+  const [pan, setPan]                 = useState({ x: 0, y: 0 });
+  const [rotation, setRotation]       = useState(0);
+  const [showGrid, setShowGrid]       = useState(true);
+  const [showDetails, setShowDetails] = useState(false);
+  const [dimensions, setDimensions]   = useState<{ width: number; height: number } | null>(null);
+  const [isDragging, setIsDragging]   = useState(false);
+  const [dragStart, setDragStart]     = useState({ x: 0, y: 0 });
+  const [isConvertingHeic, setIsConvertingHeic] = useState(false);
+  const [imageError, setImageError]             = useState(false);
+  const [readyUrl, setReadyUrl]                 = useState<string | null>(null);
+  const [mediaError, setMediaError]             = useState(false);
+  const [isTruncatedPreview, setIsTruncatedPreview] = useState(false);
+  const pdfBufferRef                            = useRef<Uint8Array | null>(null);
+  const fileBufferRef                           = useRef<Uint8Array | null>(null);
+  const cachedMediaPathRef                      = useRef<string | null>(null);
+  const mediaBlobRetryRef                       = useRef(0);
+  const imageBlobRetryRef                       = useRef(false);
+  const [pdfData, setPdfData]                   = useState<Uint8Array | null>(null);
+  const [pdfUrl, setPdfUrl]                     = useState<string | null>(null);
+
+  // ── Video preview states & refs ──────────────────────────────────────────
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoContainerRef = useRef<HTMLDivElement>(null);
+  const [isVideoPlaying, setIsVideoPlaying] = useState(false);
+  const [videoCurrentTime, setVideoCurrentTime] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [videoVolume, setVideoVolume] = useState(1);
+  const [isVideoMuted, setIsVideoMuted] = useState(false);
+  const [videoSpeed, setVideoSpeed] = useState(1);
+  const [isVideoFullscreen, setIsVideoFullscreen] = useState(false);
+  const [showVideoControls, setShowVideoControls] = useState(true);
+  const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+
+  // ── Audio preview states & refs ──────────────────────────────────────────
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  const [audioCurrentTime, setAudioCurrentTime] = useState(0);
+  const [audioDuration, setAudioDuration] = useState(0);
+  const [audioVolume, setAudioVolume] = useState(1);
+  const [isAudioMuted, setIsAudioMuted] = useState(false);
+  const [audioSpeed, setAudioSpeed] = useState(1);
+  const [showAudioSpeedMenu, setShowAudioSpeedMenu] = useState(false);
+
+  // Video autohide controls effect
+  const lastActiveRef = useRef<number>(Date.now());
+  useEffect(() => {
+    const vExt = currentFile?.name.split(".").pop()?.toLowerCase() ?? "";
+    const isCurrentVideo = Boolean(
+      currentFile &&
+        ((currentFile.mime || "").toLowerCase().startsWith("video/") || VIDEO_EXTS.has(vExt))
+    );
+    if (!isCurrentVideo) return;
+    const handleMouseMove = () => {
+      setShowVideoControls(true);
+      lastActiveRef.current = Date.now();
+    };
+    const handleMouseLeave = () => setShowVideoControls(false);
+    const container = videoContainerRef.current;
+    if (container) {
+      container.addEventListener("mousemove", handleMouseMove);
+      container.addEventListener("mouseleave", handleMouseLeave);
+    }
+    const interval = setInterval(() => {
+      if (Date.now() - lastActiveRef.current > 2000 && isVideoPlaying) {
+        setShowVideoControls(false);
+        setShowSpeedMenu(false);
+      }
+    }, 500);
+    return () => {
+      if (container) {
+        container.removeEventListener("mousemove", handleMouseMove);
+        container.removeEventListener("mouseleave", handleMouseLeave);
+      }
+      clearInterval(interval);
+    };
+  }, [currentFile, isVideoPlaying]);
+
+  // Video fullscreen handler
+  const handleVideoFullscreen = useCallback(() => {
+    const container = videoContainerRef.current;
+    const video = videoRef.current;
+    if (!container || !video) return;
+
+    const doc = document as any;
+    const cElem = container as any;
+    const vElem = video as any;
+
+    const isFS = !!(
+      doc.fullscreenElement ||
+      doc.webkitFullscreenElement ||
+      doc.mozFullScreenElement ||
+      doc.msFullscreenElement
+    );
+
+    const requestFSOnVideo = () => {
+      try {
+        if (vElem.requestFullscreen) {
+          vElem.requestFullscreen().catch((err: any) => {
+            logger.error("video.requestFullscreen failed:", err);
+          });
+        } else if (vElem.webkitRequestFullscreen) {
+          vElem.webkitRequestFullscreen();
+        } else if (vElem.webkitRequestFullScreen) {
+          vElem.webkitRequestFullScreen();
+        } else if (vElem.webkitEnterFullscreen) {
+          try {
+            vElem.webkitEnterFullscreen();
+          } catch (e) {
+            logger.error("webkitEnterFullscreen threw:", e);
+          }
+        }
+      } catch (err) {
+        logger.error("All video fullscreen methods failed:", err);
+      }
+    };
+
+    if (!isFS) {
+      try {
+        if (cElem.requestFullscreen) {
+          cElem.requestFullscreen().catch((err: any) => {
+            logger.warn("Container fullscreen rejected, trying video directly:", err);
+            requestFSOnVideo();
+          });
+        } else if (cElem.webkitRequestFullscreen) {
+          cElem.webkitRequestFullscreen();
+        } else if (cElem.webkitRequestFullScreen) {
+          cElem.webkitRequestFullScreen();
+        } else if (cElem.mozRequestFullScreen) {
+          cElem.mozRequestFullScreen();
+        } else if (cElem.msRequestFullscreen) {
+          cElem.msRequestFullscreen();
+        } else {
+          requestFSOnVideo();
+        }
+      } catch (err) {
+        logger.warn("Container fullscreen threw error, trying video directly:", err);
+        requestFSOnVideo();
+      }
+    } else {
+      try {
+        if (doc.exitFullscreen) {
+          doc.exitFullscreen().catch((err: unknown) => logger.error(err));
+        } else if (doc.webkitExitFullscreen) {
+          doc.webkitExitFullscreen();
+        } else if (doc.webkitCancelFullScreen) {
+          doc.webkitCancelFullScreen();
+        } else if (doc.mozCancelFullScreen) {
+          doc.mozCancelFullScreen();
+        } else if (doc.msExitFullscreen) {
+          doc.msExitFullscreen();
+        }
+      } catch (err) {
+        logger.error("Failed to exit fullscreen:", err);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      const doc = document as any;
+      const isFS = !!(
+        doc.fullscreenElement ||
+        doc.webkitFullscreenElement ||
+        doc.mozFullScreenElement ||
+        doc.msFullscreenElement
+      );
+      setIsVideoFullscreen(isFS);
+    };
+
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", onFullscreenChange);
+    document.addEventListener("mozfullscreenchange", onFullscreenChange);
+    document.addEventListener("MSFullscreenChange", onFullscreenChange);
+
+    return () => {
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+      document.removeEventListener("webkitfullscreenchange", onFullscreenChange);
+      document.removeEventListener("mozfullscreenchange", onFullscreenChange);
+      document.removeEventListener("MSFullscreenChange", onFullscreenChange);
+    };
+  }, []);
+
+  // Video control handlers
+  const togglePlayVideo = useCallback(() => {
+    if (!videoRef.current) return;
+    if (isVideoPlaying) {
+      videoRef.current.pause();
+    } else {
+      videoRef.current.play().catch((err: unknown) => logger.error(err));
+    }
+  }, [isVideoPlaying]);
+
+  const handleVideoTimeUpdate = useCallback(() => {
+    if (!videoRef.current) return;
+    setVideoCurrentTime(videoRef.current.currentTime);
+  }, []);
+
+  const handleVideoLoadedMetadata = useCallback(() => {
+    if (!videoRef.current) return;
+    setVideoDuration(videoRef.current.duration);
+  }, []);
+
+  const handleVideoSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!videoRef.current) return;
+    const val = parseFloat(e.target.value);
+    videoRef.current.currentTime = val;
+    setVideoCurrentTime(val);
+  }, []);
+
+  const handleVideoVolumeChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!videoRef.current) return;
+    const val = parseFloat(e.target.value);
+    videoRef.current.volume = val;
+    setVideoVolume(val);
+    if (val > 0) {
+      videoRef.current.muted = false;
+      setIsVideoMuted(false);
+    }
+  }, []);
+
+  const toggleVideoMute = useCallback(() => {
+    if (!videoRef.current) return;
+    const nextMuted = !isVideoMuted;
+    videoRef.current.muted = nextMuted;
+    setIsVideoMuted(nextMuted);
+  }, [isVideoMuted]);
+
+  const handleVideoSpeedChange = useCallback((speed: number) => {
+    if (!videoRef.current) return;
+    videoRef.current.playbackRate = speed;
+    setVideoSpeed(speed);
+    setShowSpeedMenu(false);
+  }, []);
+
+  const skipVideo = useCallback((amount: number) => {
+    if (!videoRef.current) return;
+    videoRef.current.currentTime = Math.min(
+      Math.max(videoRef.current.currentTime + amount, 0),
+      videoRef.current.duration || 0
+    );
+  }, []);
+
+  // Audio control handlers
+  const togglePlayAudio = useCallback(() => {
+    if (!audioRef.current) return;
+    if (isAudioPlaying) {
+      audioRef.current.pause();
+    } else {
+      audioRef.current.play().catch((err: unknown) => logger.error(err));
+    }
+  }, [isAudioPlaying]);
+
+  const handleAudioTimeUpdate = useCallback(() => {
+    if (!audioRef.current) return;
+    setAudioCurrentTime(audioRef.current.currentTime);
+  }, []);
+
+  const handleAudioLoadedMetadata = useCallback(() => {
+    if (!audioRef.current) return;
+    setAudioDuration(audioRef.current.duration);
+  }, []);
+
+  const handleAudioSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!audioRef.current) return;
+    const val = parseFloat(e.target.value);
+    audioRef.current.currentTime = val;
+    setAudioCurrentTime(val);
+  }, []);
+
+  const handleAudioVolumeChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!audioRef.current) return;
+    const val = parseFloat(e.target.value);
+    audioRef.current.volume = val;
+    setAudioVolume(val);
+    if (val > 0) {
+      audioRef.current.muted = false;
+      setIsAudioMuted(false);
+    }
+  }, []);
+
+  const toggleAudioMute = useCallback(() => {
+    if (!audioRef.current) return;
+    const nextMuted = !isAudioMuted;
+    audioRef.current.muted = nextMuted;
+    setIsAudioMuted(nextMuted);
+  }, [isAudioMuted]);
+
+  const handleAudioSpeedChange = useCallback((speed: number) => {
+    if (!audioRef.current) return;
+    audioRef.current.playbackRate = speed;
+    setAudioSpeed(speed);
+    setShowAudioSpeedMenu(false);
+  }, []);
+
+  const skipAudio = useCallback((amount: number) => {
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = Math.min(
+      Math.max(audioRef.current.currentTime + amount, 0),
+      audioRef.current.duration || 0
+    );
+  }, []);
+
+  const zoomIn = useCallback(() => setZoom(z => Math.min(z + 0.25, 4)), []);
+  const zoomOut = useCallback(() => setZoom(z => Math.max(z - 0.25, 0.25)), []);
+  const resetZoom = useCallback(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+    setRotation(0);
+  }, []);
+  const rotateClockwise = useCallback(() => setRotation(r => (r + 90) % 360), []);
+  const rotateCounterClockwise = useCallback(() => setRotation(r => (r - 90) % 360), []);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return; // Only left click drag
+    setIsDragging(true);
+    setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+  }, [pan]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!isDragging) return;
+    setPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
+  }, [isDragging, dragStart]);
+
+  const handleMouseUp = useCallback(() => {
+    setIsDragging(false);
+  }, []);
+
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    // Only zoom when over the image container
+    const factor = e.deltaY < 0 ? 1.1 : 0.9;
+    setZoom(z => Math.min(Math.max(z * factor, 0.25), 4));
+  }, []);
+
+  // ── Touch gesture state (refs avoid stale closures across renders) ──────
+  const touchStateRef = useRef<{
+    mode: "none" | "pan" | "pinch";
+    lastX: number;
+    lastY: number;
+    lastDist: number;
+    lastPan: { x: number; y: number };
+    lastZoom: number;
+  }>({
+    mode: "none",
+    lastX: 0,
+    lastY: 0,
+    lastDist: 0,
+    lastPan: { x: 0, y: 0 },
+    lastZoom: 1,
+  });
+
+  const getTouchDist = (t: React.TouchList) =>
+    Math.hypot(
+      t[1].clientX - t[0].clientX,
+      t[1].clientY - t[0].clientY
+    );
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    e.preventDefault();
+    const ts = touchStateRef.current;
+    if (e.touches.length === 1) {
+      ts.mode = "pan";
+      ts.lastX = e.touches[0].clientX;
+      ts.lastY = e.touches[0].clientY;
+      ts.lastPan = { x: 0, y: 0 }; // will be set from current state via setPan
+      // We read current pan via the setter to avoid stale closure
+      setPan(p => {
+        ts.lastPan = p;
+        return p; // no-op update just to capture current value
+      });
+    } else if (e.touches.length === 2) {
+      ts.mode = "pinch";
+      ts.lastDist = getTouchDist(e.touches);
+      ts.lastX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      ts.lastY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+      setZoom(z => { ts.lastZoom = z; return z; });
+      setPan(p => { ts.lastPan = p; return p; });
+    }
+  }, []);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    e.preventDefault();
+    const ts = touchStateRef.current;
+
+    if (ts.mode === "pan" && e.touches.length === 1) {
+      const dx = e.touches[0].clientX - ts.lastX;
+      const dy = e.touches[0].clientY - ts.lastY;
+      ts.lastX = e.touches[0].clientX;
+      ts.lastY = e.touches[0].clientY;
+      setPan(p => ({ x: p.x + dx, y: p.y + dy }));
+    } else if (ts.mode === "pinch" && e.touches.length === 2) {
+      const dist = getTouchDist(e.touches);
+      const scaleDelta = dist / ts.lastDist;
+      ts.lastDist = dist;
+      setZoom(z => Math.min(Math.max(z * scaleDelta, 0.25), 4));
+
+      // Also pan by mid-point movement so image stays under fingers
+      const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+      const dx = midX - ts.lastX;
+      const dy = midY - ts.lastY;
+      ts.lastX = midX;
+      ts.lastY = midY;
+      setPan(p => ({ x: p.x + dx, y: p.y + dy }));
+    }
+  }, []);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length === 0) {
+      touchStateRef.current.mode = "none";
+      setIsDragging(false);
+    } else if (e.touches.length === 1) {
+      // One finger lifted during pinch — switch back to pan
+      touchStateRef.current.mode = "pan";
+      touchStateRef.current.lastX = e.touches[0].clientX;
+      touchStateRef.current.lastY = e.touches[0].clientY;
+    }
+  }, []);
+
+  // ── Theme-derived surface colors (Google Drive Material 3) ───────────────
+  const colors = useMemo(() => isDark ? {
+    bg:         "#000000",
+    topbar:     "#0a0a0a",
+    statusbar:  "#0a0a0a",
+    border:     "rgba(255, 255, 255, 0.04)",
+    text:       "#e3e3e3",
+    muted:      "#8e918f",
+    hover:      "#1f2124",
+    badgeBg:    "#161719",
+    badgeText:  "#c4c7c5",
+    badgeBdr:   "rgba(255, 255, 255, 0.04)",
+    editBadgeBg:"rgba(168,199,250,0.15)",
+    editBadgeText:"#a8c7fa",
+    editBadgeBdr:"rgba(168,199,250,0.3)",
+    progressTrack:"#161719",
+    errorBg:    "rgba(239,68,68,0.08)",
+    errorBdr:   "rgba(239,68,68,0.2)",
+    errorText:  "#f87171",
+    fallbackBg: "#111214",
+    fallbackBdr:"rgba(255, 255, 255, 0.04)",
+    dotGrid:    "#161719",
+  } : {
+    bg:         "#f8fafd",
+    topbar:     "#ffffff",
+    statusbar:  "#ffffff",
+    border:     "#e0e2e7",
+    text:       "#1f1f1f",
+    muted:      "#444746",
+    hover:      "#f0f4f9",
+    badgeBg:    "#f0f4f9",
+    badgeText:  "#444746",
+    badgeBdr:   "#e0e2e7",
+    editBadgeBg:"rgba(11,87,208,0.08)",
+    editBadgeText:"#0b57d0",
+    editBadgeBdr:"rgba(11,87,208,0.25)",
+    progressTrack:"#e0e2e7",
+    errorBg:    "rgba(239,68,68,0.06)",
+    errorBdr:   "rgba(239,68,68,0.18)",
+    errorText:  "#dc2626",
+    fallbackBg: "#ffffff",
+    fallbackBdr:"#e0e2e7",
+    dotGrid:    "#e0e2e7",
+  }, [isDark]);
+
+  // ── Update lastOpenedAt ──────────────────────────────────────────────────
+  useEffect(() => {
+    if (file) {
+      const store = useFileStore.getState();
+      store.setFiles(updateFileLocal(store.files, file.id, { lastOpenedAt: Date.now() }));
+    }
+  }, [file]);
+
+  // ── Load file on change ──────────────────────────────────────────────────
+  useEffect(() => {
+    const revokeIfBlob = (url: string | null) => {
+      if (url && url.startsWith("blob:") && !isCachedImageUrl(url)) {
+        URL.revokeObjectURL(url);
+      }
+    };
+
+    if (!file) {
+      setContentUrl((prev) => {
+        revokeIfBlob(prev);
+        return null;
+      });
+      setTextContent(null); setMarkdownHtml(null);
+      setRichDocHtml(null); setWorkbookSheets(null); setActiveSheetIdx(0);
+      setPresentationSlides(null); setArchiveEntries(null); setTextEncoding("UTF-8");
+      setError(null); setIsEditMode(false); setEditContent(""); setSaveStatus("idle");
+      pdfBufferRef.current = null;
+      fileBufferRef.current = null;
+      cachedMediaPathRef.current = null;
+      mediaBlobRetryRef.current = 0;
+      imageBlobRetryRef.current = false;
+      setPdfData(null);
+      setPdfUrl(null);
+      setIsTruncatedPreview(false);
+      setImageError(false);
+      setMediaError(false);
+      setIsConvertingHeic(false);
+      return;
+    }
+
+    let current = true;
+    const abortController = new AbortController();
+
+    const buildDownloadOpts = (targetFile: TeleFile) => ({
+      segments: targetFile.segments,
+      enc: targetFile.enc,
+      plainSize: targetFile.enc?.plainSize ?? targetFile.size,
+    });
+
+    const streamToPreviewCache = async (targetFile: TeleFile): Promise<string> => {
+      if (targetFile.offline && (await isCachedOffline(targetFile.id))) {
+        if (current) setProgress(100);
+        return await getOfflineFilePath(targetFile.id);
+      }
+      const safeName = targetFile.name.replace(/[/\\?%*:|"<>]/g, "_").trim() || "preview.bin";
+      const cacheKey = `${targetFile.id}_${safeName}`;
+      const expectedPlainSize = targetFile.enc?.plainSize ?? targetFile.size;
+      const existing = await invoke<string | null>("check_preview_cache", {
+        fileName: cacheKey,
+        expectedSize: expectedPlainSize > 0 ? expectedPlainSize : null,
+      }).catch(() => null);
+      if (existing) {
+        if (current) setProgress(100);
+        return existing;
+      }
+      const targetPath = await invoke<string>("get_preview_cache_path", {
+        fileName: cacheKey,
+      });
+      await streamFileToLocalPath(
+        targetFile.channelId,
+        targetFile.messageId,
+        targetPath,
+        (pct) => { if (current) setProgress(pct); },
+        abortController.signal,
+        targetFile.size,
+        buildDownloadOpts(targetFile)
+      );
+      void invoke("cleanup_preview_cache", {}).catch(() => {});
+      return targetPath;
+    };
+
+    (async () => {
+      setLoading(true); setProgress(0); setError(null);
+      setTextContent(null);
+      setTextEncoding("UTF-8");
+      setContentUrl((prev) => {
+        revokeIfBlob(prev);
+        return null;
+      });
+      setMarkdownHtml(null);
+      setRichDocHtml(null);
+      setWorkbookSheets(null);
+      setActiveSheetIdx(0);
+      setPresentationSlides(null);
+      setArchiveEntries(null);
+      setMdViewMode("preview"); setHtmlViewMode("preview"); setCsvViewMode("table"); setSvgViewMode("image");
+      setWrapLines(false); setCopiedCode(false);
+      pdfBufferRef.current = null;
+      fileBufferRef.current = null;
+      cachedMediaPathRef.current = null;
+      mediaBlobRetryRef.current = 0;
+      imageBlobRetryRef.current = false;
+      setPdfData(null);
+      setPdfUrl(null);
+      setIsTruncatedPreview(false);
+      setImageError(false);
+      setMediaError(false);
+      setIsVideoPlaying(false);
+      setVideoCurrentTime(0);
+      setVideoDuration(0);
+      setIsAudioPlaying(false);
+      setAudioCurrentTime(0);
+      setAudioDuration(0);
+      setIsConvertingHeic(false);
+
+      const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+      const mimeLower = (file.mime || "").toLowerCase();
+      const lowerName = file.name.toLowerCase();
+      const isSvgFile = ext === "svg" || lowerName.endsWith(".svg") || mimeLower === "image/svg+xml";
+      const isPdfFile = ext === "pdf" || mimeLower === "application/pdf" || mimeLower.includes("pdf");
+      const isHeicFile = ext === "heic" || ext === "heif" || mimeLower === "image/heic" || mimeLower === "image/heif";
+      const isImageFile = (mimeLower.startsWith("image/") || IMAGE_EXTS.has(ext)) && !isSvgFile;
+
+      // Fast path: image already fetched earlier (or prefetched as a neighbour) -> show instantly.
+      if ((isImageFile || isSvgFile) && !isHeicFile) {
+        const hit = getCachedImageUrl(file);
+        if (hit) {
+          pinImageUrl(hit);
+          setContentUrl(hit);
+          setProgress(100);
+          setLoading(false);
+          return;
+        }
+      }
+      const isVideoFile = mimeLower.startsWith("video/") || VIDEO_EXTS.has(ext);
+      const isAudioFile = mimeLower.startsWith("audio/") || AUDIO_EXTS.has(ext);
+      const isRichDocument = RICH_DOCUMENT_EXTS.has(ext) && file.size <= 50 * 1024 * 1024;
+      const isWorkbook = SPREADSHEET_WORKBOOK_EXTS.has(ext) && file.size <= 40 * 1024 * 1024;
+      const isPresentation = PRESENTATION_EXTS.has(ext) && file.size <= 60 * 1024 * 1024;
+      const isInspectableArchive =
+        (INSPECTABLE_ARCHIVE_EXTS.has(ext) || lowerName.endsWith(".tar.gz")) &&
+        file.size <= 80 * 1024 * 1024;
+      const isArchiveFile = ARCHIVE_EXTS.has(ext) || lowerName.endsWith(".tar.gz");
+      const isTextMime = (
+        mimeLower.startsWith("text/") ||
+        mimeLower.includes("javascript") || mimeLower.includes("typescript") ||
+        mimeLower.includes("json") || mimeLower.includes("xml") ||
+        mimeLower.includes("yaml") || mimeLower.includes("x-sh") ||
+        mimeLower.includes("x-python")
+      );
+      const isExplicitTextOrCode = isTextMime || isEditableFile(file) || isSvgFile;
+      const isKnownBinaryNoPreview =
+        (isArchiveFile && !isInspectableArchive) ||
+        (NON_PREVIEWABLE_BINARY_EXTS.has(ext) &&
+          !isExplicitTextOrCode &&
+          !isImageFile &&
+          !isVideoFile &&
+          !isAudioFile &&
+          !isPdfFile &&
+          !isRichDocument &&
+          !isWorkbook &&
+          !isPresentation &&
+          !isInspectableArchive);
+      const isUnrenderableImage =
+        isImageFile &&
+        UNRENDERABLE_IMAGE_EXTS.has(ext) &&
+        !mimeLower.startsWith("image/jpeg") &&
+        !mimeLower.startsWith("image/png") &&
+        !mimeLower.startsWith("image/webp");
+      const isTauri = typeof window !== "undefined" && Boolean((window as any).__TAURI_INTERNALS__);
+
+      try {
+        // 1. Instant 0-download handling for non-inspectable archives, installers,
+        //    legacy binary formats, oversized rich containers, and camera RAW/PSD images.
+        if (isKnownBinaryNoPreview) {
+          return;
+        }
+        if (isUnrenderableImage) {
+          if (current) setImageError(true);
+          return;
+        }
+
+        // 2. Stream videos & audio directly to disk cache on Tauri and serve via
+        //    asset:// HTTP 206 byte-range requests instead of buffering giant media
+        //    files into JS/Blob RAM.
+        if (isVideoFile || isAudioFile) {
+          if (isTauri) {
+            const localPath = await streamToPreviewCache(file);
+            if (!current || abortController.signal.aborted) return;
+            cachedMediaPathRef.current = localPath;
+            const assetUrl = convertFileSrc(localPath);
+            setContentUrl((prev) => {
+              revokeIfBlob(prev);
+              return assetUrl;
+            });
+            return;
+          }
+
+          const MAX_WEB_MEDIA_BLOB_BYTES = 250 * 1024 * 1024;
+          if (file.size > MAX_WEB_MEDIA_BLOB_BYTES) {
+            if (current) setMediaError(true);
+            return;
+          }
+          const mediaBuffer = await downloadFileToBuffer(
+            file.channelId,
+            file.messageId,
+            (pct) => { if (current) setProgress(pct); },
+            abortController.signal,
+            buildDownloadOpts(file)
+          );
+          if (!current || abortController.signal.aborted) return;
+          const mediaMime = getMediaMimeType(
+            file.name,
+            file.mime,
+            isVideoFile ? "video" : "audio"
+          );
+          const mediaBlob = new Blob([mediaBuffer as any], { type: mediaMime });
+          setContentUrl((prev) => {
+            revokeIfBlob(prev);
+            return URL.createObjectURL(mediaBlob);
+          });
+          return;
+        }
+
+        // 3. Large raster images (> 15 MB) stream directly to disk cache on Tauri
+        //    instead of allocating multi-hundred-MB buffers in JS RAM.
+        const LARGE_IMAGE_THRESHOLD_BYTES = 15 * 1024 * 1024;
+        if (isImageFile && !isHeicFile && isTauri && file.size > LARGE_IMAGE_THRESHOLD_BYTES) {
+          const localPath = await streamToPreviewCache(file);
+          if (!current || abortController.signal.aborted) return;
+          cachedMediaPathRef.current = localPath;
+          const assetUrl = convertFileSrc(localPath);
+          setContentUrl((prev) => {
+            revokeIfBlob(prev);
+            return assetUrl;
+          });
+          return;
+        }
+
+        // Guard giant HEIC files (> 60 MB) so in-JS heic2any conversion doesn't freeze WebView.
+        const MAX_HEIC_CONVERT_BYTES = 60 * 1024 * 1024;
+        if (isHeicFile && file.size > MAX_HEIC_CONVERT_BYTES) {
+          if (current) setImageError(true);
+          return;
+        }
+
+        // 4. Huge PDFs (> 80 MB) stream to disk cache on Tauri and range-load in PdfViewer.
+        const LARGE_PDF_THRESHOLD_BYTES = 80 * 1024 * 1024;
+        if (isPdfFile && isTauri && file.size > LARGE_PDF_THRESHOLD_BYTES) {
+          const localPath = await streamToPreviewCache(file);
+          if (!current || abortController.signal.aborted) return;
+          cachedMediaPathRef.current = localPath;
+          setPdfUrl(convertFileSrc(localPath));
+          return;
+        }
+
+        const MAX_TEXT_PREVIEW_BYTES = 3 * 1024 * 1024;
+        let buffer: Uint8Array;
+        let prefixTruncated = false;
+
+        const isUnknownType =
+          !isImageFile &&
+          !isPdfFile &&
+          !isRichDocument &&
+          !isWorkbook &&
+          !isPresentation &&
+          !isInspectableArchive &&
+          !isExplicitTextOrCode;
+
+        if (!file.offline && isExplicitTextOrCode && !isSvgFile && !initialEditMode && file.size > MAX_TEXT_PREVIEW_BYTES) {
+          // 5a. Oversized text/code/CSV/log files: fetch ONLY the 3 MiB prefix.
+          const res = await downloadFilePrefixToBuffer(
+            file.channelId,
+            file.messageId,
+            MAX_TEXT_PREVIEW_BYTES,
+            (pct) => { if (current) setProgress(pct); },
+            abortController.signal,
+            buildDownloadOpts(file)
+          );
+          if (!current || abortController.signal.aborted) return;
+          buffer = res.data;
+          prefixTruncated = res.truncated;
+        } else if (!file.offline && isUnknownType && file.size > 4 * 1024 * 1024) {
+          // 5b. Huge unknown/extensionless files: sniff 64 KiB header first.
+          const sniff = await downloadFilePrefixToBuffer(
+            file.channelId,
+            file.messageId,
+            64 * 1024,
+            (pct) => { if (current) setProgress(Math.min(50, pct)); },
+            abortController.signal,
+            buildDownloadOpts(file)
+          );
+          if (!current || abortController.signal.aborted) return;
+          if (!decodeTextBuffer(sniff.data.subarray(0, 4096)).isText) {
+            if (current) setProgress(100);
+            return;
+          }
+          const textPrefix = await downloadFilePrefixToBuffer(
+            file.channelId,
+            file.messageId,
+            MAX_TEXT_PREVIEW_BYTES,
+            (pct) => { if (current) setProgress(pct); },
+            abortController.signal,
+            buildDownloadOpts(file)
+          );
+          if (!current || abortController.signal.aborted) return;
+          buffer = textPrefix.data;
+          prefixTruncated = textPrefix.truncated;
+        } else if (file.offline) {
+          setProgress(50);
+          try {
+            buffer = await readOfflineCache(file.id);
+            setProgress(100);
+            logger.log(`[FilePreviewModal] Loaded "${file.name}" from local offline cache.`);
+          } catch (offlineErr) {
+            logger.warn(`[FilePreviewModal] Failed to read offline cache for "${file.name}", falling back to download:`, offlineErr);
+            buffer = await downloadFileToBuffer(
+              file.channelId, file.messageId,
+              (pct) => { if (current) setProgress(pct); },
+              abortController.signal,
+              buildDownloadOpts(file)
+            );
+          }
+        } else {
+          buffer = await downloadFileToBuffer(
+            file.channelId, file.messageId,
+            (pct) => { if (current) setProgress(pct); },
+            abortController.signal,
+            buildDownloadOpts(file)
+          );
+        }
+        if (!current || abortController.signal.aborted) return;
+
+        if (!prefixTruncated) {
+          fileBufferRef.current = buffer;
+        }
+
+        if (isPdfFile) {
+          pdfBufferRef.current = buffer;
+          setPdfData(buffer);
+          return;
+        }
+
+        if (isRichDocument) {
+          try {
+            const docPreview = extractDocumentPreview(buffer, file.name);
+            if (current) setRichDocHtml(docPreview.content);
+            return;
+          } catch (richErr) {
+            logger.warn("[FilePreviewModal] Rich document extraction failed:", richErr);
+            return;
+          }
+        }
+
+        if (isWorkbook) {
+          try {
+            const sheets = extractSpreadsheetSheets(buffer, file.name);
+            if (current && sheets.length > 0) {
+              setWorkbookSheets(sheets);
+              setActiveSheetIdx(0);
+            }
+            return;
+          } catch (sheetErr) {
+            logger.warn("[FilePreviewModal] Workbook extraction failed:", sheetErr);
+            return;
+          }
+        }
+
+        if (isPresentation) {
+          try {
+            const slides = extractPresentationSlides(buffer, file.name);
+            if (current) setPresentationSlides(slides);
+            return;
+          } catch (slideErr) {
+            logger.warn("[FilePreviewModal] Presentation extraction failed:", slideErr);
+            return;
+          }
+        }
+
+        if (isInspectableArchive) {
+          try {
+            const entries = inspectArchiveEntries(buffer, file.name);
+            if (current && entries.length > 0) setArchiveEntries(entries);
+            return;
+          } catch (archErr) {
+            logger.warn("[FilePreviewModal] Archive inspection failed:", archErr);
+            return;
+          }
+        }
+
+        // HEIC image conversion for seamless in-app preview
+        if (isHeicFile) {
+          setIsConvertingHeic(true);
+          try {
+            const rawBlob = new Blob([buffer as any], { type: "image/heic" });
+            const heic2anyModule = await import("heic2any");
+            const heic2any = heic2anyModule.default || heic2anyModule;
+            const conversionResult = await (heic2any as any)({
+              blob: rawBlob,
+              toType: "image/jpeg",
+              quality: 0.9,
+            });
+            const jpegBlob = Array.isArray(conversionResult) ? conversionResult[0] : conversionResult;
+            if (current) {
+              setContentUrl((prev) => {
+                revokeIfBlob(prev);
+                return URL.createObjectURL(jpegBlob);
+              });
+            }
+          } catch (heicErr) {
+            logger.warn("[FilePreviewModal] heic2any conversion failed, falling back to direct blob:", heicErr);
+            const fallbackBlob = new Blob([buffer as any], { type: "image/heic" });
+            if (current) {
+              setContentUrl((prev) => {
+                revokeIfBlob(prev);
+                return URL.createObjectURL(fallbackBlob);
+              });
+            }
+          } finally {
+            if (current) setIsConvertingHeic(false);
+          }
+          return;
+        }
+
+        if (isImageFile || isSvgFile) {
+          let blobMime = file.mime || "application/octet-stream";
+          if (isSvgFile) blobMime = "image/svg+xml";
+          else if (isImageFile && !file.mime.startsWith("image/")) {
+            blobMime = `image/${ext === "jpg" ? "jpeg" : ext}`;
+          }
+          const blob = new Blob([buffer as any], { type: blobMime });
+          if (current) {
+            const readyUrl = putCachedImage(file, blob);
+            pinImageUrl(readyUrl);
+            setContentUrl((prev) => {
+              revokeIfBlob(prev);
+              return readyUrl;
+            });
+          }
+        }
+
+        let isTruncated = prefixTruncated;
+        let sliceBuffer = buffer;
+        if (buffer.length > MAX_TEXT_PREVIEW_BYTES) {
+          sliceBuffer = buffer.subarray(0, MAX_TEXT_PREVIEW_BYTES);
+          isTruncated = true;
+        }
+
+        const decoded = decodeTextBuffer(sliceBuffer);
+        const shouldDecodeText =
+          isExplicitTextOrCode ||
+          (decoded.isText && !isImageFile);
+
+        if (shouldDecodeText) {
+          let text = decoded.isText ? decoded.text : new TextDecoder().decode(sliceBuffer);
+          // Normalize line endings to LF (\n) to ensure consistent line counting and rendering
+          text = text.replace(/\r\n|\r/g, "\n");
+          if (isTruncated) {
+            text += `\n\n${t("truncatedNotice")}`;
+          }
+          if (!current) return;
+          setIsTruncatedPreview(isTruncated);
+          setTextEncoding(decoded.isText ? decoded.encoding : "UTF-8");
+          setTextContent(text);
+
+          if (mimeLower === "text/markdown" || file.name.toLowerCase().endsWith(".md") || file.name.toLowerCase().endsWith(".markdown")) {
+            const html = await marked.parse(text);
+            if (current) setMarkdownHtml(sanitizePreviewHtml(html));
+          }
+
+          if (initialEditMode && !isTruncated && current) {
+            setEditContent(text);
+            setIsEditMode(true);
+          }
+        }
+      } catch (err: any) {
+        if (err?.name === "AbortError" || abortController.signal.aborted) {
+          return;
+        }
+        if (err instanceof EncryptionError && err.code === "locked") {
+          onClose();
+          return;
+        }
+        if (current) {
+          if (!navigator.onLine && !file.offline) {
+            setError(t("errors.offlineUnavailable"));
+          } else {
+            setError(err.message || t("errors.downloadFailed"));
+          }
+        }
+      } finally {
+        if (current) setLoading(false);
+      }
+    })();
+
+    return () => {
+      current = false;
+      abortController.abort();
+    };
+  }, [file]);
+
+  useEffect(() => {
+    return () => {
+      if (contentUrl && contentUrl.startsWith("blob:") && !isCachedImageUrl(contentUrl)) {
+        URL.revokeObjectURL(contentUrl);
+      }
+    };
+  }, [contentUrl]);
+
+  // ── Handlers (memoized) ──────────────────────────────────────────────────
+  const handleDownload = useCallback(() => {
+    if (currentFile) {
+      downloadFileFromTelegram(
+        currentFile.channelId,
+        currentFile.messageId,
+        currentFile.name,
+        undefined,
+        {
+          segments: currentFile.segments,
+          enc: currentFile.enc,
+          plainSize: currentFile.enc?.plainSize ?? currentFile.size,
+        }
+      ).catch((err) => {
+        logger.error("Download failed:", err);
+      });
+    }
+  }, [currentFile]);
+
+  const handleOpenInSystemApp = useCallback(async () => {
+    if (!currentFile) return;
+    if (isWebRuntime()) {
+      handleDownload();
+      return;
+    }
+    try {
+      const { appLocalDataDir, join } = await import("@tauri-apps/api/path");
+      const { openPath } = await import("@tauri-apps/plugin-opener");
+      const { exists } = await import("@tauri-apps/plugin-fs");
+
+      const safeName = currentFile.name.replace(/[/\\?%*:|"<>]/g, "_").trim() || "document.bin";
+      const fileExt = currentFile.name.split(".").pop()?.toLowerCase() ?? "";
+      const expectedExtSuffix = fileExt ? `.${fileExt}` : "";
+      let targetPath = cachedMediaPathRef.current;
+      // Only reuse cached path directly when it preserves the file extension so the OS picks the right app.
+      if (targetPath && expectedExtSuffix && !targetPath.toLowerCase().endsWith(expectedExtSuffix)) {
+        targetPath = null;
+      }
+
+      if (!targetPath) {
+        const previewKey = `${currentFile.id}_${safeName}`;
+        const expectedPlainSize = currentFile.enc?.plainSize ?? currentFile.size;
+        targetPath = await invoke<string | null>("check_preview_cache", {
+          fileName: previewKey,
+          expectedSize: expectedPlainSize > 0 ? expectedPlainSize : null,
+        }).catch(() => null);
+      }
+
+      if (!targetPath) {
+        const cacheDir = await appLocalDataDir();
+        const tempFilePath = await join(cacheDir, `temp_${currentFile.id}_${safeName}`);
+
+        let fileReady = false;
+        try {
+          fileReady = await exists(tempFilePath);
+        } catch {
+          fileReady = false;
+        }
+
+        if (!fileReady || fileBufferRef.current) {
+          if (fileBufferRef.current) {
+            await saveBinaryFile(tempFilePath, fileBufferRef.current);
+          } else if (pdfBufferRef.current) {
+            await saveBinaryFile(tempFilePath, pdfBufferRef.current);
+          } else if (currentFile.offline && (await isCachedOffline(currentFile.id))) {
+            const offlineBuf = await readOfflineCache(currentFile.id);
+            await saveBinaryFile(tempFilePath, offlineBuf);
+          } else {
+            toast.info(t("toast.preparingSystemViewer"));
+            await streamFileToLocalPath(
+              currentFile.channelId,
+              currentFile.messageId,
+              tempFilePath,
+              undefined,
+              undefined,
+              currentFile.size,
+              {
+                segments: currentFile.segments,
+                enc: currentFile.enc,
+                plainSize: currentFile.enc?.plainSize ?? currentFile.size,
+              }
+            );
+          }
+        }
+        targetPath = tempFilePath;
+      }
+
+      try {
+        await openPath(targetPath);
+      } catch (openerErr) {
+        logger.warn("plugin-opener failed, invoking native open_file_in_system_viewer:", openerErr);
+        await invoke("open_file_in_system_viewer", { path: targetPath });
+      }
+      toast.success(t("toast.openedInSystemViewer"));
+    } catch (err: any) {
+      logger.error("Failed to open document in system app:", err);
+      toast.error(t("toast.systemViewerFailed"));
+      downloadFileFromTelegram(
+        currentFile.channelId,
+        currentFile.messageId,
+        currentFile.name,
+        undefined,
+        {
+          segments: currentFile.segments,
+          enc: currentFile.enc,
+          plainSize: currentFile.enc?.plainSize ?? currentFile.size,
+        }
+      ).catch(() => {});
+    }
+  }, [currentFile, t]);
+
+  const handleMediaError = useCallback(async () => {
+    if (!currentFile) {
+      setMediaError(true);
+      return;
+    }
+    const localPath = cachedMediaPathRef.current;
+    const MAX_BLOB_FALLBACK_BYTES = 150 * 1024 * 1024;
+    if (
+      localPath &&
+      mediaBlobRetryRef.current < 2 &&
+      currentFile.size > 0 &&
+      currentFile.size <= MAX_BLOB_FALLBACK_BYTES
+    ) {
+      const attempt = mediaBlobRetryRef.current;
+      mediaBlobRetryRef.current += 1;
+      try {
+        const { readFile } = await import("@tauri-apps/plugin-fs");
+        const bytes = await readFile(localPath);
+        const ext = currentFile.name.split(".").pop()?.toLowerCase() ?? "";
+        const mimeLower = (currentFile.mime || "").toLowerCase();
+        const kind = mimeLower.startsWith("video/") || VIDEO_EXTS.has(ext) ? "video" : "audio";
+        const primaryMime = getMediaMimeType(currentFile.name, currentFile.mime, kind);
+        const fallbackMime =
+          attempt === 0
+            ? primaryMime
+            : kind === "video"
+              ? primaryMime === "video/mp4"
+                ? "video/webm"
+                : "video/mp4"
+              : primaryMime === "audio/mp4"
+                ? "audio/mpeg"
+                : "audio/mp4";
+        if (attempt === 0 || fallbackMime !== primaryMime) {
+          const copy = new Uint8Array(bytes.length);
+          copy.set(bytes);
+          const blob = new Blob([copy.buffer], { type: fallbackMime });
+          setContentUrl((prev) => {
+            if (prev && prev.startsWith("blob:") && !isCachedImageUrl(prev)) URL.revokeObjectURL(prev);
+            return URL.createObjectURL(blob);
+          });
+          return;
+        }
+      } catch (fallbackErr) {
+        logger.warn("[FilePreviewModal] Blob media fallback failed:", fallbackErr);
+      }
+    }
+    logger.warn(`[FilePreviewModal] Media element failed to decode: ${currentFile.name}`);
+    setMediaError(true);
+  }, [currentFile]);
+
+  const handleEnterEdit = useCallback(() => {
+    setEditContent(textContent ?? "");
+    setIsEditMode(true);
+    setSaveStatus("idle");
+  }, [textContent]);
+
+  const handleCancelEdit = useCallback(() => {
+    setIsEditMode(false);
+    setEditContent("");
+    setSaveStatus("idle");
+  }, []);
+
+  // ── Image gallery: sibling images in the same folder ──────────────────────
+  const allFiles = useFileStore((s) => s.files);
+  const imageSiblings = useMemo(() => {
+    if (!currentFile || !isBrowserImage(currentFile)) return [] as TeleFile[];
+    return allFiles
+      .filter(
+        (f) =>
+          f.folderPath === currentFile.folderPath &&
+          !!f.trashed === !!currentFile.trashed &&
+          !!f.archived === !!currentFile.archived &&
+          isBrowserImage(f)
+      )
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+  }, [allFiles, currentFile]);
+  const currentIndex = currentFile ? imageSiblings.findIndex((f) => f.id === currentFile.id) : -1;
+
+  const goRelative = useCallback(
+    (delta: number) => {
+      const n = imageSiblings.length;
+      if (n < 2 || currentIndex < 0 || !onFileUpdate) return;
+      const next = imageSiblings[(currentIndex + delta + n) % n];
+      if (next) {
+        setZoom(1);
+        setPan({ x: 0, y: 0 });
+        setRotation(0);
+        onFileUpdate(next);
+      }
+    },
+    [imageSiblings, currentIndex, onFileUpdate]
+  );
+
+  // Warm the cache for the next/previous images once the current one is on screen.
+  useEffect(() => {
+    if (!currentFile || !contentUrl || loading || currentIndex < 0 || imageSiblings.length < 2) return;
+    const n = imageSiblings.length;
+    const targets = [1, -1, 2]
+      .map((d) => imageSiblings[(currentIndex + d + n) % n])
+      .filter((f) => f && f.id !== currentFile.id);
+    const timer = window.setTimeout(() => targets.forEach(prefetchImage), 120);
+    return () => window.clearTimeout(timer);
+  }, [currentFile, contentUrl, loading, currentIndex, imageSiblings]);
+
+  // ← / → keys flip between images
+  useEffect(() => {
+    if (!currentFile || isEditMode || imageSiblings.length < 2) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        goRelative(1);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        goRelative(-1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [currentFile, isEditMode, imageSiblings.length, goRelative]);
+
+  // Escape key handler: exit edit mode or close preview modal
+  useEffect(() => {
+    if (!currentFile) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (isEditMode) {
+          handleCancelEdit();
+        } else {
+          onClose();
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [currentFile, isEditMode, handleCancelEdit, onClose]);
+
+  const handleSave = useCallback(async () => {
+    if (!currentFile || isSaving) return;
+    setIsSaving(true); setSaveStatus("saving");
+
+    let optimisticFiles: TeleFile[] | null = null;
+    let pushedSnapshot = false;
+
+    try {
+      const bytes = new TextEncoder().encode(editContent);
+      const newFile = new File([bytes], currentFile.name, { type: currentFile.mime });
+
+      // 1) Upload the updated plaintext bytes cleanly to Telegram.
+      const uploadRes = await uploadFileToTelegram(
+        currentFile.channelId,
+        currentFile.name,
+        bytes.length,
+        newFile,
+        currentFile.folderPath ?? "/",
+        () => {},
+        undefined,
+        true,
+        null,
+        {
+          allowMultiSegment: true,
+        }
+      );
+
+      const newMessage = isHashedUploadResult(uploadRes) ? uploadRes.message : uploadRes;
+      const newHash = isHashedUploadResult(uploadRes) ? uploadRes.hash : undefined;
+      const newSegments = isHashedUploadResult(uploadRes) ? uploadRes.segments : undefined;
+      const newEnc = isHashedUploadResult(uploadRes) ? uploadRes.enc : undefined;
+
+      const updated: TeleFile = {
+        ...currentFile,
+        messageId: newMessage.id,
+        size: bytes.length,
+        uploadedAt: Date.now(),
+        ...(newHash ? { hash: newHash } : {}),
+        segments: newSegments,
+        enc: newEnc,
+      };
+
+      // 2) Build the optimistic files array (replaces the old entry by id).
+      //    Push a snapshot BEFORE mutating so we can roll back on hard error.
+      optimisticFiles = useFileStore
+        .getState()
+        .files.map((f) => (f.id === currentFile.id ? updated : f));
+      useFileStore.getState().pushSnapshot();
+      pushedSnapshot = true;
+      useFileStore.getState().setFiles(optimisticFiles);
+
+      // 3) Persist through the shared IndexQueue. Transient errors (FLOOD_WAIT,
+      //    timeout, network) are swallowed by the queue and retried — we keep
+      //    the optimistic UI. Hard errors reject; we roll back below.
+      await enqueueSave(currentFile.channelId, optimisticFiles);
+      // Commit succeeded — discard the snapshot.
+      useFileStore.getState().popSnapshot();
+      pushedSnapshot = false;
+
+      // 4) Fire-and-forget delete of all old Telegram segment message(s).
+      const newIds = new Set(getFileMessageIds(updated));
+      for (const oldId of getFileMessageIds(currentFile)) {
+        if (!newIds.has(oldId)) {
+          deleteTelegramMessage(currentFile.channelId, oldId).catch((err) => {
+            logger.warn(
+              `[FilePreviewModal] Could not delete old message ${oldId} for "${currentFile.name}":`,
+              err?.message || err
+            );
+          });
+        }
+      }
+
+      // 5) Refresh current active file reference, buffer, parent layout, and view state
+      setActiveFile(updated);
+      onFileUpdate?.(updated);
+      fileBufferRef.current = bytes;
+
+      setTextContent(editContent);
+      if (currentFile.name.endsWith(".md")) {
+        setMarkdownHtml(sanitizePreviewHtml(await marked.parse(editContent)));
+      } else {
+        setMarkdownHtml(null);
+      }
+
+      setIsEditMode(false);
+      setEditContent("");
+      setSaveStatus("saved");
+      toast.success(t("toast.saved", { name: currentFile.name }));
+    } catch (err: any) {
+      // Hard error path: roll back the optimistic files array.
+      if (pushedSnapshot) {
+        const snap = useFileStore.getState().popSnapshot();
+        if (snap) useFileStore.getState().setFiles(snap);
+        else if (optimisticFiles) {
+          // No snapshot — revert by re-applying the old entry.
+          const rolled = useFileStore
+            .getState()
+            .files.map((f) => (f.id === currentFile.id ? currentFile : f));
+          useFileStore.getState().setFiles(rolled);
+        }
+      }
+      setSaveStatus("error");
+      toast.error(t("toast.saveFailed", { message: err.message ?? t("toast.unknownError") }));
+    } finally {
+      setIsSaving(false);
+    }
+  }, [currentFile, editContent, isSaving, t, onFileUpdate]);
+
+  // ── O2 Code Editor integration ──────────────────────────────────────────
+  const handleOpenInO2 = useCallback(async () => {
+    const code = isEditMode ? editContent : (textContent ?? "");
+    const lInfo = detectLang(file?.name ?? "");
+    const o2Lang = O2_LANG_MAP[lInfo.hljsLang];
+    if (!o2Lang) return;
+    // Encode code as UTF-8 base64 for URL transport
+    const encoded = btoa(unescape(encodeURIComponent(code)));
+    const url = `https://o2code.vercel.app/${o2Lang}?code=${encoded}&run=true`;
+    
+    try {
+      await runtimeOpenUrl(url);
+    } catch (err) {
+      logger.error("Failed to open URL in browser:", err);
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+  }, [file, textContent, editContent, isEditMode]);
+
+  const handleCopyContent = useCallback(() => {
+    const activeSheetText =
+      workbookSheets && workbookSheets.length > 0
+        ? (workbookSheets[activeSheetIdx]?.csv ?? workbookSheets[0]?.csv ?? "")
+        : null;
+    const current = isEditMode ? editContent : (activeSheetText ?? textContent ?? "");
+    if (!current) return;
+    navigator.clipboard.writeText(current);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2000);
+    toast.success(t("toast.copied"));
+  }, [isEditMode, editContent, textContent, workbookSheets, activeSheetIdx, t]);
+
+  const cycleFontSize = useCallback(() => {
+    setCodeFontSize(prev => {
+      if (prev === 12) return 13;
+      if (prev === 13) return 15;
+      if (prev === 15) return 16;
+      return 12;
+    });
+  }, []);
+
+  const handleFormatJson = useCallback(() => {
+    try {
+      const src = isEditMode ? editContent : (textContent ?? "");
+      const parsed = JSON.parse(src);
+      const formatted = JSON.stringify(parsed, null, 2);
+      if (isEditMode) {
+        setEditContent(formatted);
+      } else {
+        setTextContent(formatted);
+      }
+      toast.success(t("toast.jsonFormatted"));
+    } catch (e: any) {
+      toast.error(t("toast.invalidJson", { message: e.message }));
+    }
+  }, [isEditMode, editContent, textContent, t]);
+
+  // ── Derived state ─────────────────────────────────────────────────────────
+  const langInfo        = detectLang(currentFile?.name ?? "");
+  const ext             = currentFile?.name.split(".").pop()?.toLowerCase() ?? "";
+  const mimeLower       = (currentFile?.mime || "").toLowerCase();
+  const isSvg           = ext === "svg" || (mimeLower === "image/svg+xml");
+  const isImage         = (mimeLower.startsWith("image/") || IMAGE_EXTS.has(ext)) && !isSvg;
+  const isVideo         = mimeLower.startsWith("video/") || VIDEO_EXTS.has(ext);
+  const isAudio         = mimeLower.startsWith("audio/") || AUDIO_EXTS.has(ext);
+  const isPdf           = ext === "pdf" || mimeLower === "application/pdf" || mimeLower.includes("pdf");
+  const isMarkdownFile  = ext === "md" || ext === "markdown" || (mimeLower === "text/markdown");
+  const isHtmlFile      = ext === "html" || ext === "htm" || ext === "xhtml" || mimeLower === "text/html";
+  const isCsvFile       = ext === "csv" || (mimeLower === "text/csv");
+  const isTsvFile       = ext === "tsv" || (mimeLower === "text/tab-separated-values");
+  const isWorkbookFile  = workbookSheets !== null && workbookSheets.length > 0;
+  const activeWorkbookSheet = isWorkbookFile
+    ? (workbookSheets[activeSheetIdx] ?? workbookSheets[0])
+    : null;
+  const activeTableContent = activeWorkbookSheet ? activeWorkbookSheet.csv : textContent;
+  const isTableData     = ((isCsvFile || isTsvFile) && textContent !== null) || isWorkbookFile;
+  const isJsonFile      = ext === "json" || ext === "jsonc" || ext === "json5" || mimeLower.includes("json");
+  const isArchive       = ARCHIVE_EXTS.has(ext) || Boolean(currentFile?.name.toLowerCase().endsWith(".tar.gz"));
+
+  const isMarkdownPreview   = isMarkdownFile && mdViewMode === "preview" && !isEditMode;
+  const isHtmlPreview       = isHtmlFile && htmlViewMode === "preview" && !isEditMode && textContent !== null;
+  const isRichDocView       = richDocHtml !== null && !isEditMode;
+  const isPresentationView  = presentationSlides !== null && !isEditMode;
+  const isArchiveExplorer   = archiveEntries !== null;
+  const isTableView         = isTableData && csvViewMode === "table" && !isEditMode && activeTableContent !== null;
+  const isSvgImageView      = isSvg && svgViewMode === "image" && !isEditMode;
+  const isCode              =
+    (textContent !== null || (isWorkbookFile && csvViewMode === "source")) &&
+    !isMarkdownPreview &&
+    !isHtmlPreview &&
+    !isTableView &&
+    !isSvgImageView;
+  const canEdit           = Boolean(currentFile && isEditableFile(currentFile) && !isTruncatedPreview && !loading && !error && textContent !== null);
+  const canRunInO2        = textContent !== null && !loading && !error && O2_LANG_MAP[langInfo.hljsLang] !== undefined;
+
+  const statusParts: string[] = [];
+  if (langInfo.displayName && !isImage && !isVideo && !isAudio && !isPdf && !isArchive && !isWorkbookFile) {
+    statusParts.push(langInfo.displayName);
+  }
+  if (isMarkdownPreview && textContent) {
+    const words = textContent.trim().split(/\s+/).filter(Boolean).length;
+    const readingMin = Math.max(1, Math.ceil(words / 200));
+    statusParts.push(t("status.words", { count: words }));
+    statusParts.push(t("status.readingTime", { count: readingMin }));
+  } else if (isTableView && activeTableContent) {
+    const lines = activeTableContent.split("\n").filter(l => l.trim().length > 0).length;
+    statusParts.push(t("status.rows", { count: lines }));
+    if (workbookSheets && workbookSheets.length > 1) {
+      statusParts.push(`${workbookSheets.length} sheets`);
+    }
+  } else if (isPresentationView && presentationSlides) {
+    statusParts.push(`${presentationSlides.length} slides`);
+  } else if (textContent !== null || (isWorkbookFile && activeTableContent !== null)) {
+    const lc = (isEditMode ? editContent : (activeTableContent ?? "")).split("\n").length;
+    statusParts.push(t("status.lines", { count: lc }));
+    statusParts.push(wrapLines ? t("status.wrapOn") : t("status.wrapOff"));
+    statusParts.push(`${codeFontSize}px`);
+  }
+  if (!isPresentationView) {
+    statusParts.push(textEncoding);
+  }
+  if (isEditMode) statusParts.push(t("status.cursor", { line: cursorPos.line, col: cursorPos.col }));
+
+  if (!file || !currentFile) return null;
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={currentFile.name}
+      id="file-preview-modal"
+      className="fixed inset-0 z-50 flex flex-col animate-in fade-in duration-150"
+      style={{ background: colors.bg, color: colors.text }}
+    >
+      {/* ── Topbar ─────────────────────────────────────────────────────── */}
+      <div
+        className="flex items-center justify-between pl-3 pr-2 sm:pl-4 sm:pr-3 shrink-0 pt-[var(--safe-area-top,env(safe-area-inset-top,0px))]"
+        style={{
+          height: "calc(44px + var(--safe-area-top, env(safe-area-inset-top, 0px)))",
+          background: colors.topbar,
+          borderBottom: `1px solid ${colors.border}`,
+        }}
+      >
+        {/* Left: icon + name + badges */}
+        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1 pr-2 sm:pr-4">
+          <FileTypeIcon mime={currentFile.mime} name={currentFile.name} />
+          <span
+            className="text-[12px] sm:text-[13px] font-semibold truncate tracking-tight min-w-0"
+            style={{ color: colors.text }}
+            title={currentFile.name}
+          >
+            {currentFile.name}
+          </span>
+
+          {langInfo.displayName && !isImage && !isVideo && !isAudio && !isPdf && (
+            <span
+              className="shrink-0 text-[9px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded-md uppercase tracking-wider"
+              style={{
+                background: colors.badgeBg,
+                color: colors.badgeText,
+                border: `1px solid ${colors.badgeBdr}`,
+              }}
+            >
+              {langInfo.displayName}
+            </span>
+          )}
+
+          {isEditMode && (
+            <span
+              className="shrink-0 text-[9px] sm:text-[10px] font-extrabold px-1.5 sm:px-2 py-0.5 rounded-md uppercase tracking-widest"
+              style={{
+                background: colors.editBadgeBg,
+                color: colors.editBadgeText,
+                border: `1px solid ${colors.editBadgeBdr}`,
+              }}
+            >
+              {t("topbar.editing")}
+            </span>
+          )}
+
+          {saveStatus === "saved" && !isEditMode && (
+            <span
+              className="shrink-0 flex items-center gap-1 text-[10px] sm:text-[11px] font-bold text-emerald-500"
+            >
+              <CheckCircle2 className="h-3 w-3" />
+              <span className="hidden xs:inline">{t("topbar.saved")}</span>
+            </span>
+          )}
+        </div>
+
+        {/* Right: actions */}
+        <div className="flex items-center gap-1 shrink-0">
+          {isEditMode ? (
+            <>
+              <button
+                onClick={handleCancelEdit}
+                disabled={isSaving}
+                className="flex items-center gap-1 h-7 px-2.5 sm:px-3 text-[11px] sm:text-[12px] font-semibold rounded-lg cursor-pointer transition-colors duration-150 disabled:opacity-50"
+                style={{ color: colors.muted }}
+                onMouseEnter={e => (e.currentTarget.style.background = colors.hover)}
+                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+              >
+                <XIcon className="h-3.5 w-3.5" />
+                <span>{t("topbar.cancel")}</span>
+              </button>
+              <Button
+                size="sm"
+                onClick={handleSave}
+                disabled={isSaving}
+                className="h-7 px-2.5 sm:px-3 text-[11px] sm:text-[12px] font-bold bg-blue-600 hover:bg-blue-500 text-white rounded-lg cursor-pointer disabled:opacity-50 transition-colors duration-150"
+              >
+                {isSaving
+                  ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />{t("topbar.saving")}</>
+                  : <><Save className="h-3.5 w-3.5 mr-1.5" />{t("topbar.save")}</>
+                }
+              </Button>
+            </>
+          ) : (
+            <>
+              {/* ── Desktop Inline Action Bar (>= sm) ─────────────────────────────────── */}
+              <div className="hidden sm:flex items-center gap-1">
+                {/* View Switchers */}
+                {isMarkdownFile && textContent !== null && (
+                  <div
+                    className="flex items-center p-0.5 rounded-lg border text-xs mr-1"
+                    style={{ borderColor: colors.border, background: colors.badgeBg }}
+                  >
+                    <button
+                      onClick={() => setMdViewMode("preview")}
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
+                        mdViewMode === "preview"
+                          ? "bg-white dark:bg-[#1f2124] text-blue-600 dark:text-blue-400 shadow-xs"
+                          : "text-[#444746] dark:text-[#8e918f] hover:text-black dark:hover:text-white"
+                      }`}
+                    >
+                      <Eye className="h-3 w-3" />
+                      <span>{t("viewMode.preview")}</span>
+                    </button>
+                    <button
+                      onClick={() => setMdViewMode("source")}
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
+                        mdViewMode === "source"
+                          ? "bg-white dark:bg-[#1f2124] text-blue-600 dark:text-blue-400 shadow-xs"
+                          : "text-[#444746] dark:text-[#8e918f] hover:text-black dark:hover:text-white"
+                      }`}
+                    >
+                      <Code className="h-3 w-3" />
+                      <span>{t("viewMode.source")}</span>
+                    </button>
+                  </div>
+                )}
+
+                {isHtmlFile && textContent !== null && (
+                  <div
+                    className="flex items-center p-0.5 rounded-lg border text-xs mr-1"
+                    style={{ borderColor: colors.border, background: colors.badgeBg }}
+                  >
+                    <button
+                      onClick={() => setHtmlViewMode("preview")}
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
+                        htmlViewMode === "preview"
+                          ? "bg-white dark:bg-[#1f2124] text-blue-600 dark:text-blue-400 shadow-xs"
+                          : "text-[#444746] dark:text-[#8e918f] hover:text-black dark:hover:text-white"
+                      }`}
+                    >
+                      <Eye className="h-3 w-3" />
+                      <span>{t("viewMode.preview")}</span>
+                    </button>
+                    <button
+                      onClick={() => setHtmlViewMode("source")}
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
+                        htmlViewMode === "source"
+                          ? "bg-white dark:bg-[#1f2124] text-blue-600 dark:text-blue-400 shadow-xs"
+                          : "text-[#444746] dark:text-[#8e918f] hover:text-black dark:hover:text-white"
+                      }`}
+                    >
+                      <Code className="h-3 w-3" />
+                      <span>{t("viewMode.source")}</span>
+                    </button>
+                  </div>
+                )}
+
+                {isTableData && (
+                  <div
+                    className="flex items-center p-0.5 rounded-lg border text-xs mr-1"
+                    style={{ borderColor: colors.border, background: colors.badgeBg }}
+                  >
+                    <button
+                      onClick={() => setCsvViewMode("table")}
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
+                        csvViewMode === "table"
+                          ? "bg-white dark:bg-[#1f2124] text-emerald-600 dark:text-emerald-400 shadow-xs"
+                          : "text-[#444746] dark:text-[#8e918f] hover:text-black dark:hover:text-white"
+                      }`}
+                    >
+                      <FileSpreadsheet className="h-3 w-3" />
+                      <span>{t("viewMode.table")}</span>
+                    </button>
+                    <button
+                      onClick={() => setCsvViewMode("source")}
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
+                        csvViewMode === "source"
+                          ? "bg-white dark:bg-[#1f2124] text-emerald-600 dark:text-emerald-400 shadow-xs"
+                          : "text-[#444746] dark:text-[#8e918f] hover:text-black dark:hover:text-white"
+                      }`}
+                    >
+                      <Code className="h-3 w-3" />
+                      <span>{t("viewMode.raw")}</span>
+                    </button>
+                  </div>
+                )}
+
+                {isSvg && textContent !== null && (
+                  <div
+                    className="flex items-center p-0.5 rounded-lg border text-xs mr-1"
+                    style={{ borderColor: colors.border, background: colors.badgeBg }}
+                  >
+                    <button
+                      onClick={() => setSvgViewMode("image")}
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
+                        svgViewMode === "image"
+                          ? "bg-white dark:bg-[#1f2124] text-purple-600 dark:text-purple-400 shadow-xs"
+                          : "text-[#444746] dark:text-[#8e918f]"
+                      }`}
+                    >
+                      <ImageIcon className="h-3 w-3" />
+                      <span>{t("viewMode.vector")}</span>
+                    </button>
+                    <button
+                      onClick={() => setSvgViewMode("code")}
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
+                        svgViewMode === "code"
+                          ? "bg-white dark:bg-[#1f2124] text-purple-600 dark:text-purple-400 shadow-xs"
+                          : "text-[#444746] dark:text-[#8e918f]"
+                      }`}
+                    >
+                      <Code className="h-3 w-3" />
+                      <span>{t("viewMode.code")}</span>
+                    </button>
+                  </div>
+                )}
+
+                {isJsonFile && textContent !== null && (
+                  <button
+                    onClick={handleFormatJson}
+                    title={t("topbar.formatJsonTitle")}
+                    className="flex items-center gap-1 h-7 px-2 text-[12px] font-semibold rounded-lg cursor-pointer transition-colors"
+                    style={{ color: colors.muted }}
+                    onMouseEnter={e => (e.currentTarget.style.background = colors.hover)}
+                    onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-amber-500" />
+                    <span className="hidden md:inline">{t("topbar.format")}</span>
+                  </button>
+                )}
+
+                {(isCode || (isMarkdownFile && mdViewMode === "source") || (isHtmlFile && htmlViewMode === "source") || (isTableData && csvViewMode === "source") || (isSvg && svgViewMode === "code")) && (
+                  <>
+                    <button
+                      onClick={() => setWrapLines(!wrapLines)}
+                      title={wrapLines ? t("topbar.disableWrap") : t("topbar.enableWrap")}
+                      className={`flex items-center justify-center h-7 w-8 rounded-lg cursor-pointer transition-colors ${
+                        wrapLines ? "text-blue-600 bg-blue-500/10 dark:text-blue-400 dark:bg-blue-500/20" : ""
+                      }`}
+                      style={{ color: wrapLines ? undefined : colors.muted }}
+                      onMouseEnter={e => { if (!wrapLines) e.currentTarget.style.background = colors.hover; }}
+                      onMouseLeave={e => { if (!wrapLines) e.currentTarget.style.background = "transparent"; }}
+                    >
+                      <WrapText className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={cycleFontSize}
+                      title={t("topbar.fontSizeTitle", { size: codeFontSize })}
+                      className="flex items-center gap-0.5 h-7 px-2 rounded-lg cursor-pointer transition-colors text-[11px] font-mono font-medium"
+                      style={{ color: colors.muted }}
+                      onMouseEnter={e => (e.currentTarget.style.background = colors.hover)}
+                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                    >
+                      <Type className="h-3 w-3" />
+                      <span>{codeFontSize}</span>
+                    </button>
+                  </>
+                )}
+
+                {(textContent !== null || isWorkbookFile) && (
+                  <button
+                    onClick={handleCopyContent}
+                    title={t("topbar.copyTitle")}
+                    className="flex items-center justify-center h-7 w-8 rounded-lg cursor-pointer transition-colors duration-150"
+                    style={{ color: colors.muted }}
+                    onMouseEnter={e => (e.currentTarget.style.background = colors.hover)}
+                    onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                  >
+                    {copiedCode ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                  </button>
+                )}
+
+                {canRunInO2 && (
+                  <button
+                    onClick={handleOpenInO2}
+                    title={t("topbar.runTitle")}
+                    className="flex items-center gap-1.5 h-7 px-2.5 text-[12px] font-semibold rounded-lg cursor-pointer transition-all duration-150"
+                    style={{ color: isDark ? "#34d399" : "#059669" }}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.background = isDark ? "rgba(52,211,153,0.12)" : "rgba(5,150,105,0.08)";
+                    }}
+                    onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    <span className="hidden md:inline">{t("topbar.run")}</span>
+                  </button>
+                )}
+
+                {canEdit && (
+                  <button
+                    onClick={handleEnterEdit}
+                    title={t("topbar.editTitle")}
+                    className="flex items-center gap-1.5 h-7 px-2.5 text-[12px] font-semibold rounded-lg cursor-pointer transition-colors duration-150"
+                    style={{ color: colors.muted }}
+                    onMouseEnter={e => (e.currentTarget.style.background = colors.hover)}
+                    onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    <span className="hidden md:inline">{t("topbar.edit")}</span>
+                  </button>
+                )}
+
+                {(isImage || isSvgImageView) && (
+                  <button
+                    onClick={() => setShowDetails(!showDetails)}
+                    title={t("topbar.toggleDetails")}
+                    className={`flex items-center justify-center h-7 w-8 rounded-lg cursor-pointer transition-colors duration-150 ${showDetails ? "text-blue-500 bg-blue-500/10 dark:bg-blue-500/20" : ""}`}
+                    style={{ color: showDetails ? undefined : colors.muted }}
+                    onMouseEnter={e => { if (!showDetails) e.currentTarget.style.background = colors.hover; }}
+                    onMouseLeave={e => { if (!showDetails) e.currentTarget.style.background = "transparent"; }}
+                  >
+                    <Info className="h-4 w-4" />
+                  </button>
+                )}
+
+                {!loading && !error && (
+                  <button
+                    onClick={handleOpenInSystemApp}
+                    title={t("topbar.openInSystemViewerTitle", "Open in System App")}
+                    className="flex items-center gap-1.5 h-7 px-2.5 text-[12px] font-semibold rounded-lg cursor-pointer transition-colors duration-150 mr-1"
+                    style={{
+                      color: colors.text,
+                      background: colors.badgeBg,
+                      border: `1px solid ${colors.badgeBdr}`,
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = colors.hover)}
+                    onMouseLeave={e => (e.currentTarget.style.background = colors.badgeBg)}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5 text-blue-500" />
+                    <span className="hidden lg:inline">{t("topbar.openInSystemViewer", "Open in System App")}</span>
+                  </button>
+                )}
+
+                <button
+                  onClick={handleDownload}
+                  title={t("topbar.download")}
+                  className="flex items-center justify-center h-7 w-8 rounded-lg cursor-pointer transition-colors duration-150"
+                  style={{ color: colors.muted }}
+                  onMouseEnter={e => (e.currentTarget.style.background = colors.hover)}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                >
+                  <Download className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* ── Mobile Compact Actions (< sm) ─────────────────────────────────── */}
+              <div className="flex sm:hidden items-center gap-0.5">
+                {canEdit && (
+                  <button
+                    onClick={handleEnterEdit}
+                    title={t("topbar.editTitle")}
+                    className="flex items-center justify-center h-7 w-7 rounded-lg cursor-pointer transition-colors"
+                    style={{ color: colors.muted }}
+                    onMouseEnter={e => (e.currentTarget.style.background = colors.hover)}
+                    onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                )}
+
+                {(textContent !== null || isWorkbookFile) && (
+                  <button
+                    onClick={handleCopyContent}
+                    title={t("topbar.copyTitle")}
+                    className="flex items-center justify-center h-7 w-7 rounded-lg cursor-pointer transition-colors"
+                    style={{ color: colors.muted }}
+                    onMouseEnter={e => (e.currentTarget.style.background = colors.hover)}
+                    onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                  >
+                    {copiedCode ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                  </button>
+                )}
+
+                {/* More options menu */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      aria-label="More actions"
+                      className="flex items-center justify-center h-7 w-7 rounded-lg cursor-pointer transition-colors"
+                      style={{ color: colors.muted }}
+                      onMouseEnter={e => (e.currentTarget.style.background = colors.hover)}
+                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                    >
+                      <MoreVertical className="h-4 w-4" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="end"
+                    className="w-52 p-1.5 rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-[#141518] text-slate-800 dark:text-slate-200 shadow-xl shadow-black/20 dark:shadow-black/80 z-[60]"
+                  >
+                    {isMarkdownFile && textContent !== null && (
+                      <DropdownMenuItem
+                        onClick={() => setMdViewMode(mdViewMode === "preview" ? "source" : "preview")}
+                        className="flex items-center justify-between text-xs py-2 px-2.5 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-white/[0.08]"
+                      >
+                        <span className="flex items-center gap-2">
+                          {mdViewMode === "preview" ? <Code className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" /> : <Eye className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" />}
+                          {mdViewMode === "preview" ? t("viewMode.source") : t("viewMode.preview")}
+                        </span>
+                      </DropdownMenuItem>
+                    )}
+
+                    {isHtmlFile && textContent !== null && (
+                      <DropdownMenuItem
+                        onClick={() => setHtmlViewMode(htmlViewMode === "preview" ? "source" : "preview")}
+                        className="flex items-center justify-between text-xs py-2 px-2.5 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-white/[0.08]"
+                      >
+                        <span className="flex items-center gap-2">
+                          {htmlViewMode === "preview" ? <Code className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" /> : <Eye className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" />}
+                          {htmlViewMode === "preview" ? t("viewMode.source") : t("viewMode.preview")}
+                        </span>
+                      </DropdownMenuItem>
+                    )}
+
+                    {isTableData && (
+                      <DropdownMenuItem
+                        onClick={() => setCsvViewMode(csvViewMode === "table" ? "source" : "table")}
+                        className="flex items-center justify-between text-xs py-2 px-2.5 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-white/[0.08]"
+                      >
+                        <span className="flex items-center gap-2">
+                          {csvViewMode === "table" ? <Code className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" /> : <FileSpreadsheet className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" />}
+                          {csvViewMode === "table" ? t("viewMode.raw") : t("viewMode.table")}
+                        </span>
+                      </DropdownMenuItem>
+                    )}
+
+                    {isSvg && textContent !== null && (
+                      <DropdownMenuItem
+                        onClick={() => setSvgViewMode(svgViewMode === "image" ? "code" : "image")}
+                        className="flex items-center justify-between text-xs py-2 px-2.5 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-white/[0.08]"
+                      >
+                        <span className="flex items-center gap-2">
+                          {svgViewMode === "image" ? <Code className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" /> : <ImageIcon className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" />}
+                          {svgViewMode === "image" ? t("viewMode.code") : t("viewMode.vector")}
+                        </span>
+                      </DropdownMenuItem>
+                    )}
+
+                    {(isCode || (isMarkdownFile && mdViewMode === "source") || (isHtmlFile && htmlViewMode === "source") || (isTableData && csvViewMode === "source") || (isSvg && svgViewMode === "code")) && (
+                      <>
+                        <DropdownMenuItem
+                          onClick={() => setWrapLines(!wrapLines)}
+                          className="flex items-center justify-between text-xs py-2 px-2.5 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-white/[0.08]"
+                        >
+                          <span className="flex items-center gap-2">
+                            <WrapText className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" />
+                            {wrapLines ? t("topbar.disableWrap") : t("topbar.enableWrap")}
+                          </span>
+                          <span className="text-[10px] font-mono text-slate-500 dark:text-slate-400">
+                            {wrapLines ? t("status.wrapOn") : t("status.wrapOff")}
+                          </span>
+                        </DropdownMenuItem>
+
+                        <DropdownMenuItem
+                          onClick={cycleFontSize}
+                          className="flex items-center justify-between text-xs py-2 px-2.5 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-white/[0.08]"
+                        >
+                          <span className="flex items-center gap-2">
+                            <Type className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" />
+                            {t("topbar.fontSizeTitle", { size: codeFontSize })}
+                          </span>
+                          <span className="text-[10px] font-mono text-slate-500 dark:text-slate-400">{codeFontSize}px</span>
+                        </DropdownMenuItem>
+                      </>
+                    )}
+
+                    {isJsonFile && textContent !== null && (
+                      <DropdownMenuItem
+                        onClick={handleFormatJson}
+                        className="flex items-center gap-2 text-xs py-2 px-2.5 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-white/[0.08]"
+                      >
+                        <Sparkles className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />
+                        {t("topbar.format")}
+                      </DropdownMenuItem>
+                    )}
+
+                    {canRunInO2 && (
+                      <DropdownMenuItem
+                        onClick={handleOpenInO2}
+                        className="flex items-center gap-2 text-xs py-2 px-2.5 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-white/[0.08] text-emerald-600 dark:text-emerald-400"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                        {t("topbar.run")}
+                      </DropdownMenuItem>
+                    )}
+
+                    {(isImage || isSvgImageView) && (
+                      <DropdownMenuItem
+                        onClick={() => setShowDetails(!showDetails)}
+                        className="flex items-center gap-2 text-xs py-2 px-2.5 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-white/[0.08]"
+                      >
+                        <Info className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" />
+                        {showDetails ? t("topbar.toggleDetails") : t("topbar.toggleDetails")}
+                      </DropdownMenuItem>
+                    )}
+
+                    {!loading && !error && (
+                      <>
+                        <DropdownMenuSeparator className="bg-slate-200 dark:bg-white/[0.08] my-1" />
+                        <DropdownMenuItem
+                          onClick={handleOpenInSystemApp}
+                          className="flex items-center gap-2 text-xs py-2 px-2.5 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-white/[0.08]"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5 text-blue-500 dark:text-blue-400" />
+                          {t("topbar.openInSystemViewer", "Open in System App")}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={handleDownload}
+                          className="flex items-center gap-2 text-xs py-2 px-2.5 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-white/[0.08]"
+                        >
+                          <Download className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" />
+                          {t("topbar.download")}
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </>
+          )}
+
+          <button
+            onClick={onClose}
+            title={t("topbar.close")}
+            className="flex items-center justify-center h-8 w-8 sm:h-7 sm:w-8 rounded-lg cursor-pointer transition-colors duration-150 ml-0.5 hover:text-red-500"
+            style={{ color: colors.muted }}
+            onMouseEnter={e => (e.currentTarget.style.background = colors.hover)}
+            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+          >
+            <X className="h-4.5 w-4.5 sm:h-4 sm:w-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* ── Main content ──────────────────────────────────────────────────── */}
+      <div className="flex-1 overflow-hidden relative" style={{ background: colors.bg }}>
+
+        {/* Blurred thumbnail shown instantly while the full image downloads */}
+        {loading && isImage && currentFile && getCachedThumbnailUrl(currentFile) && (
+          <img
+            src={getCachedThumbnailUrl(currentFile)}
+            alt=""
+            aria-hidden="true"
+            draggable={false}
+            className="absolute inset-0 w-full h-full object-contain p-10 blur-xl scale-105 opacity-60 pointer-events-none select-none"
+          />
+        )}
+
+        {/* Loading */}
+        {loading && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3">
+            <Loader2 className="h-7 w-7 animate-spin text-blue-500" />
+            <div className="flex flex-col items-center gap-2">
+              <span
+                className="text-[10px] font-bold font-mono uppercase tracking-widest"
+                style={{ color: colors.muted }}
+              >
+                {progress > 0 ? t("loading") : (t("connecting", "Connecting...") || "Connecting...")}
+              </span>
+              <div
+                className="w-44 h-1.5 rounded-full overflow-hidden relative shadow-xs"
+                style={{ background: colors.progressTrack }}
+              >
+                {progress > 0 ? (
+                  <div
+                    className="h-full rounded-full bg-blue-500 transition-all duration-300 ease-out"
+                    style={{ width: `${Math.min(100, Math.max(progress, 6))}%` }}
+                  />
+                ) : (
+                  <div
+                    className="h-full w-2/5 rounded-full bg-blue-500 animate-indeterminate"
+                  />
+                )}
+              </div>
+              <span
+                className="text-[11px] font-mono font-medium"
+                style={{ color: colors.muted }}
+              >
+                {progress > 0 ? `${Math.round(progress)}%` : "···"}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Error */}
+        {!loading && error && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
+            <div
+              className="rounded-2xl px-6 py-4 text-[13px] font-semibold max-w-sm text-center"
+              style={{
+                background: colors.errorBg,
+                border: `1px solid ${colors.errorBdr}`,
+                color: colors.errorText,
+              }}
+            >
+              {error}
+            </div>
+            <button
+              onClick={handleDownload}
+              className="px-5 py-2 rounded-xl text-[12px] font-bold bg-blue-600 hover:bg-blue-500 text-white transition-colors duration-150 cursor-pointer"
+            >
+              {t("downloadInstead")}
+            </button>
+          </div>
+        )}
+
+        {/* Content */}
+        {!loading && !error && (
+          <div className="absolute inset-0">
+
+            {/* IMAGE / SVG VECTOR */}
+            {(isImage || isSvgImageView) && (
+              imageError && !isConvertingHeic ? (
+                <div className="w-full h-full flex items-center justify-center p-6">
+                  <div
+                    className="flex flex-col items-center max-w-md w-full p-8 rounded-3xl text-center shadow-sm"
+                    style={{
+                      background: isDark ? "#111214" : "#ffffff",
+                      border: `1px solid ${colors.border}`,
+                    }}
+                  >
+                    <div className="h-16 w-16 rounded-2xl bg-purple-500/10 text-purple-500 flex items-center justify-center mb-4">
+                      <ImageIcon className="h-8 w-8" strokeWidth={1.5} />
+                    </div>
+                    <h3 className="text-base font-bold mb-1 truncate max-w-full" style={{ color: colors.text }}>
+                      {file.name}
+                    </h3>
+                    <div className="flex items-center gap-2 mb-4">
+                      <span className="text-[11px] font-mono px-2 py-0.5 rounded-md font-semibold bg-purple-500/10 text-purple-600 dark:text-purple-400">
+                        {(ext || "image").toUpperCase()}
+                      </span>
+                      <span className="text-[11px] font-mono" style={{ color: colors.muted }}>
+                        {formatSize(file.size)}
+                      </span>
+                    </div>
+                    <p className="text-xs leading-relaxed mb-6" style={{ color: colors.muted }}>
+                      {t("image.decodeErrorDescription", "This image format cannot be previewed directly in the browser. You can open it in your system photo viewer or download it.")}
+                    </p>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={handleOpenInSystemApp}
+                        className="flex items-center gap-2 px-6 py-2.5 rounded-full text-xs font-semibold bg-[#0b57d0] hover:bg-[#0842a0] text-white shadow-xs transition-colors cursor-pointer"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        {t("unsupported.openInSystem", "Open in System App")}
+                      </button>
+                      <button
+                        onClick={handleDownload}
+                        className="flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer"
+                      >
+                        <Download className="h-4 w-4" />
+                        {t("archive.download", "Download")}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="w-full h-full flex relative overflow-hidden">
+                  {/* HEIC Conversion overlay */}
+                  {isConvertingHeic && (
+                    <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/60 backdrop-blur-xs text-white">
+                      <Loader2 className="h-8 w-8 animate-spin text-blue-400" />
+                      <span className="text-xs font-semibold">
+                        {t("image.convertingHeic", "Converting image preview…")}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Main Viewport */}
+                  <div
+                    className="flex-1 h-full flex items-center justify-center p-6 relative overflow-hidden select-none cursor-grab active:cursor-grabbing"
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseUp}
+                    onWheel={handleWheel}
+                    onDoubleClick={() => {
+                      setZoom((z) => (z > 1.01 ? 1 : 2));
+                      setPan({ x: 0, y: 0 });
+                    }}
+                    onTouchStart={handleTouchStart}
+                    onTouchMove={handleTouchMove}
+                    onTouchEnd={handleTouchEnd}
+                    style={{
+                      touchAction: "none",
+                      backgroundImage: showGrid
+                        ? `radial-gradient(circle at center, ${colors.dotGrid} 1px, transparent 1px)`
+                        : "none",
+                      backgroundSize: "20px 20px",
+                      backgroundColor: showGrid ? (isDark ? "#080c10" : "#fafafa") : colors.bg,
+                    }}
+                  >
+                    <div
+                      style={{
+                        transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom}) rotate(${rotation}deg)`,
+                        transition: isDragging ? "none" : "transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
+                      }}
+                    >
+                      {contentUrl && (
+                        <img
+                          src={contentUrl}
+                          alt={file.name}
+                          decoding="async"
+                          draggable={false}
+                          ref={(el) => {
+                            if (el && el.complete && el.naturalWidth > 0) setReadyUrl(contentUrl);
+                          }}
+                          onLoad={(e) => {
+                            const img = e.currentTarget;
+                            setDimensions({ width: img.naturalWidth, height: img.naturalHeight });
+                            setImageError(false);
+                            setReadyUrl(contentUrl);
+                          }}
+                          onError={async () => {
+                            const localPath = cachedMediaPathRef.current;
+                            if (
+                              localPath &&
+                              !imageBlobRetryRef.current &&
+                              currentFile &&
+                              currentFile.size > 0 &&
+                              currentFile.size <= 80 * 1024 * 1024
+                            ) {
+                              imageBlobRetryRef.current = true;
+                              try {
+                                const { readFile } = await import("@tauri-apps/plugin-fs");
+                                const bytes = await readFile(localPath);
+                                const imgExt = currentFile.name.split(".").pop()?.toLowerCase() ?? "";
+                                const fallbackMime =
+                                  currentFile.mime && currentFile.mime.startsWith("image/")
+                                    ? currentFile.mime
+                                    : `image/${imgExt === "jpg" ? "jpeg" : imgExt || "png"}`;
+                                const copy = new Uint8Array(bytes.length);
+                                copy.set(bytes);
+                                const blobUrl = URL.createObjectURL(
+                                  new Blob([copy.buffer], { type: fallbackMime })
+                                );
+                                setContentUrl((prev) => {
+                                  if (prev && prev.startsWith("blob:") && !isCachedImageUrl(prev)) URL.revokeObjectURL(prev);
+                                  return blobUrl;
+                                });
+                                return;
+                              } catch {
+                                // Fall through to image decode error card
+                              }
+                            }
+                            logger.warn(`[FilePreviewModal] Image failed to render: ${file.name}`);
+                            setImageError(true);
+                          }}
+                          className="max-w-[85vw] max-h-[80vh] object-contain pointer-events-none"
+                          style={{
+                            boxShadow: "0 25px 60px rgba(0,0,0,0.35)",
+                            borderRadius: "4px",
+                            opacity: readyUrl === contentUrl ? 1 : 0,
+                            transform: readyUrl === contentUrl ? "scale(1)" : "scale(0.98)",
+                            transition: "opacity 180ms ease-out, transform 220ms cubic-bezier(0.16, 1, 0.3, 1)",
+                          }}
+                        />
+                      )}
+                    </div>
+
+                  {/* Previous / next image + position counter */}
+                  {imageSiblings.length > 1 && currentIndex >= 0 && (
+                    <>
+                      <button
+                        type="button"
+                        aria-label="Previous image"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onTouchStart={(e) => e.stopPropagation()}
+                        onClick={(e) => { e.stopPropagation(); goRelative(-1); }}
+                        className="absolute left-4 top-1/2 -translate-y-1/2 z-20 h-11 w-11 rounded-full flex items-center justify-center border shadow-xl backdrop-blur-md bg-white/75 dark:bg-[#141518]/90 border-slate-200/50 dark:border-white/[0.06] text-slate-700 dark:text-slate-200 hover:scale-105 active:scale-95 transition-transform cursor-pointer"
+                      >
+                        <ChevronLeft className="h-5 w-5" />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Next image"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onTouchStart={(e) => e.stopPropagation()}
+                        onClick={(e) => { e.stopPropagation(); goRelative(1); }}
+                        className="absolute right-4 top-1/2 -translate-y-1/2 z-20 h-11 w-11 rounded-full flex items-center justify-center border shadow-xl backdrop-blur-md bg-white/75 dark:bg-[#141518]/90 border-slate-200/50 dark:border-white/[0.06] text-slate-700 dark:text-slate-200 hover:scale-105 active:scale-95 transition-transform cursor-pointer"
+                      >
+                        <ChevronRight className="h-5 w-5" />
+                      </button>
+                      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 px-3 py-1 rounded-full text-[11px] font-mono font-semibold border shadow-xl backdrop-blur-md bg-white/75 dark:bg-[#141518]/90 border-slate-200/50 dark:border-white/[0.06] text-slate-700 dark:text-slate-200">
+                        {currentIndex + 1} / {imageSiblings.length}
+                      </div>
+                    </>
+                  )}
+
+                  {/* Floating bottom controls bar (glassmorphic pill) */}
+                  <div className="absolute bottom-[calc(1.5rem+env(safe-area-inset-bottom,0px))] left-1/2 -translate-x-1/2 flex items-center gap-2.5 px-4 py-2 rounded-full border shadow-xl backdrop-blur-md bg-white/75 dark:bg-[#141518]/90 border-slate-200/50 dark:border-white/[0.06] text-slate-700 dark:text-slate-200 z-20">
+                    <button
+                      onClick={zoomOut}
+                      title={t("image.zoomOut")}
+                      className="p-1 hover:bg-slate-100 dark:hover:bg-[#1f2124] rounded-lg transition-colors cursor-pointer"
+                    >
+                      <ZoomOut className="h-4 w-4" />
+                    </button>
+                    <span className="text-[11px] font-mono font-bold min-w-[40px] text-center">
+                      {Math.round(zoom * 100)}%
+                    </span>
+                    <button
+                      onClick={zoomIn}
+                      title={t("image.zoomIn")}
+                      className="p-1 hover:bg-slate-100 dark:hover:bg-[#1f2124] rounded-lg transition-colors cursor-pointer"
+                    >
+                      <ZoomIn className="h-4 w-4" />
+                    </button>
+                    <div className="h-4 w-px bg-slate-200 dark:bg-white/[0.06]" />
+                    <button
+                      onClick={resetZoom}
+                      title={t("image.resetZoom")}
+                      className="p-1 hover:bg-slate-100 dark:hover:bg-[#1f2124] rounded-lg transition-colors cursor-pointer"
+                    >
+                      <RotateCcw className="h-4 w-4" />
+                    </button>
+                    <div className="h-4 w-px bg-slate-200 dark:bg-white/[0.06]" />
+                    <button
+                      onClick={rotateCounterClockwise}
+                      title={t("image.rotateCounterClockwise")}
+                      className="p-1 hover:bg-slate-100 dark:hover:bg-[#1f2124] rounded-lg transition-colors cursor-pointer"
+                    >
+                      <RotateCw className="h-4 w-4 -scale-x-100" />
+                    </button>
+                    <button
+                      onClick={rotateClockwise}
+                      title={t("image.rotateClockwise")}
+                      className="p-1 hover:bg-slate-100 dark:hover:bg-[#1f2124] rounded-lg transition-colors cursor-pointer"
+                    >
+                      <RotateCw className="h-4 w-4" />
+                    </button>
+                    <div className="h-4 w-px bg-slate-200 dark:bg-white/[0.06]" />
+                    <button
+                      onClick={() => setShowGrid(!showGrid)}
+                      title={t("image.toggleGrid")}
+                      className={`p-1 rounded-lg transition-colors cursor-pointer ${showGrid ? "text-blue-500" : ""}`}
+                    >
+                      <Grid3X3 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Collapsible Info Panel */}
+                {showDetails && (
+                  <div
+                    className="w-64 border-l flex flex-col shrink-0 animate-in slide-in-from-right duration-250"
+                    style={{
+                      background: isDark ? "#111214" : "#fafafa",
+                      borderColor: colors.border,
+                    }}
+                  >
+                    <div className="p-4 border-b flex items-center justify-between" style={{ borderColor: colors.border }}>
+                      <span className="text-[12px] font-bold uppercase tracking-wider text-slate-400">{t("details.title")}</span>
+                      <button
+                        onClick={() => setShowDetails(false)}
+                        className="p-1 hover:bg-slate-100 dark:hover:bg-[#1f2124] rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <div className="p-4 flex flex-col gap-4 overflow-y-auto text-[12px]">
+                      <div>
+                        <div className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-1">{t("details.name")}</div>
+                        <div className="font-semibold break-all text-slate-700 dark:text-slate-300">{currentFile.name}</div>
+                      </div>
+                      <div>
+                        <div className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-1">{t("details.dimensions")}</div>
+                        <div className="font-semibold text-slate-700 dark:text-slate-300">
+                          {dimensions ? `${dimensions.width} × ${dimensions.height} px` : t("details.loadingDimensions")}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-1">{t("details.fileSize")}</div>
+                        <div className="font-semibold text-slate-700 dark:text-slate-300">{formatSize(currentFile.size)}</div>
+                      </div>
+                      <div>
+                        <div className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-1">{t("details.mimeType")}</div>
+                        <div className="font-mono text-slate-750 dark:text-slate-400">{currentFile.mime}</div>
+                      </div>
+                      <div>
+                        <div className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-1">{t("details.path")}</div>
+                        <div className="font-semibold text-slate-700 dark:text-slate-300 font-mono text-[11px] bg-slate-100 dark:bg-[#161719] px-1.5 py-0.5 rounded border border-slate-200/50 dark:border-white/[0.04] inline-block">{currentFile.folderPath}</div>
+                      </div>
+                      <div>
+                        <div className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-1">{t("details.uploadedAt")}</div>
+                        <div className="font-semibold text-slate-700 dark:text-slate-300">
+                          {new Date(currentFile.uploadedAt).toLocaleString(i18n.language)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {/* MEDIA FALLBACK (Unsupported Video/Audio Codec e.g. MKV AC3/HEVC) */}
+            {(isVideo || isAudio) && mediaError && (
+              <div className="w-full h-full flex items-center justify-center p-6">
+                <div
+                  className="flex flex-col items-center max-w-md w-full p-8 rounded-3xl text-center shadow-sm"
+                  style={{
+                    background: isDark ? "#111214" : "#ffffff",
+                    border: `1px solid ${colors.border}`,
+                  }}
+                >
+                  <div className="h-16 w-16 rounded-2xl bg-pink-500/10 text-pink-500 flex items-center justify-center mb-4">
+                    {isVideo ? (
+                      <Film className="h-8 w-8" strokeWidth={1.5} />
+                    ) : (
+                      <Music className="h-8 w-8" strokeWidth={1.5} />
+                    )}
+                  </div>
+                  <h3 className="text-base font-bold mb-1 truncate max-w-full" style={{ color: colors.text }}>
+                    {currentFile.name}
+                  </h3>
+                  <div className="flex items-center gap-2 mb-4">
+                    <code className="text-[11px] font-mono px-2 py-0.5 rounded-md font-semibold" style={{ background: colors.badgeBg, color: colors.badgeText }}>
+                      {ext.toUpperCase() || currentFile.mime}
+                    </code>
+                    <span className="text-[11px] font-mono" style={{ color: colors.muted }}>
+                      {formatSize(currentFile.size)}
+                    </span>
+                  </div>
+                  <p className="text-xs leading-relaxed mb-6" style={{ color: colors.muted }}>
+                    {t("media.decodeErrorDescription")}
+                  </p>
+                  <div className="flex flex-wrap items-center justify-center gap-3">
+                    <button
+                      onClick={handleOpenInSystemApp}
+                      className="flex items-center gap-2 px-6 py-2.5 rounded-full text-xs font-semibold bg-[#0b57d0] hover:bg-[#0842a0] text-white shadow-xs transition-colors cursor-pointer"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      {t("media.openInSystemPlayer")}
+                    </button>
+                    <button
+                      onClick={handleDownload}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer"
+                    >
+                      <Download className="h-4 w-4" />
+                      {t("topbar.download")}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* VIDEO */}
+            {isVideo && contentUrl && !mediaError && (
+              <div
+                ref={videoContainerRef}
+                className="w-full h-full flex items-center justify-center p-4 relative bg-black select-none group"
+              >
+                {/* Native Video Element */}
+                <video
+                  ref={videoRef}
+                  src={contentUrl}
+                  preload="metadata"
+                  playsInline
+                  autoPlay
+                  onClick={togglePlayVideo}
+                  onPlay={() => setIsVideoPlaying(true)}
+                  onPause={() => setIsVideoPlaying(false)}
+                  onTimeUpdate={handleVideoTimeUpdate}
+                  onLoadedMetadata={handleVideoLoadedMetadata}
+                  onError={handleMediaError}
+                  className="max-w-full max-h-full cursor-pointer shadow-2xl rounded-lg"
+                  style={{ maxHeight: "calc(100vh - 120px)" }}
+                />
+
+                {/* Big Centered Play/Pause Overlay Button */}
+                <div
+                  onClick={togglePlayVideo}
+                  className={`absolute inset-0 flex items-center justify-center pointer-events-none transition-all duration-300 ${
+                    !isVideoPlaying || showVideoControls ? "opacity-100" : "opacity-0"
+                  }`}
+                >
+                  <button className="h-16 w-16 flex items-center justify-center rounded-full bg-black/50 border border-white/20 text-white backdrop-blur-md cursor-pointer hover:scale-110 active:scale-95 transition-all pointer-events-auto duration-200 shadow-lg">
+                    {isVideoPlaying ? (
+                      <Pause className="h-6 w-6 fill-white" />
+                    ) : (
+                      <Play className="h-6 w-6 fill-white ml-1" />
+                    )}
+                  </button>
+                </div>
+
+                {/* Glassmorphic Control Bar */}
+                <div
+                  className={`absolute bottom-6 left-6 right-6 p-4 rounded-2xl flex flex-col gap-2.5 transition-all duration-300 shadow-2xl border border-white/10 backdrop-blur-md bg-black/60 text-white z-20 ${
+                    showVideoControls ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2 pointer-events-none"
+                  }`}
+                >
+                  {/* Progress Timeline Slider */}
+                  <div className="flex items-center gap-3 w-full">
+                    <span className="text-[10px] font-mono text-white/70 min-w-[35px] text-right">
+                      {formatTime(videoCurrentTime)}
+                    </span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={videoDuration || 100}
+                      step={0.1}
+                      value={videoCurrentTime}
+                      onChange={handleVideoSeek}
+                      className="flex-1 h-1 bg-white/20 rounded-lg appearance-none cursor-pointer accent-blue-500 focus:outline-none"
+                    />
+                    <span className="text-[10px] font-mono text-white/70 min-w-[35px]">
+                      {formatTime(videoDuration)}
+                    </span>
+                  </div>
+
+                  {/* Buttons & Sliders */}
+                  <div className="flex items-center justify-between">
+                    {/* Left: Play/Pause, Skip Back, Skip Forward, Volume */}
+                    <div className="flex items-center gap-3.5">
+                      <button
+                        onClick={togglePlayVideo}
+                        className="p-1 hover:bg-white/10 rounded-lg transition-colors cursor-pointer text-white/90 hover:text-white"
+                      >
+                        {isVideoPlaying ? <Pause className="h-4.5 w-4.5" /> : <Play className="h-4.5 w-4.5" />}
+                      </button>
+
+                      <button
+                        onClick={() => skipVideo(-10)}
+                        title={t("media.skipBack")}
+                        className="p-1 hover:bg-white/10 rounded-lg transition-colors cursor-pointer text-white/85 hover:text-white"
+                      >
+                        <SkipBack className="h-4 w-4" />
+                      </button>
+
+                      <button
+                        onClick={() => skipVideo(10)}
+                        title={t("media.skipForward")}
+                        className="p-1 hover:bg-white/10 rounded-lg transition-colors cursor-pointer text-white/85 hover:text-white"
+                      >
+                        <SkipForward className="h-4 w-4" />
+                      </button>
+
+                      <div className="h-4 w-px bg-white/10" />
+
+                      {/* Volume controls */}
+                      <div className="flex items-center gap-1.5 group/volume">
+                        <button
+                          onClick={toggleVideoMute}
+                          className="p-1 hover:bg-white/10 rounded-lg transition-colors cursor-pointer text-white/85 hover:text-white"
+                        >
+                          {isVideoMuted || videoVolume === 0 ? (
+                            <VolumeX className="h-4.5 w-4.5" />
+                          ) : (
+                            <Volume2 className="h-4.5 w-4.5" />
+                          )}
+                        </button>
+                        <input
+                          type="range"
+                          min={0}
+                          max={1}
+                          step={0.05}
+                          value={isVideoMuted ? 0 : videoVolume}
+                          onChange={handleVideoVolumeChange}
+                          className="w-16 h-1 bg-white/20 rounded-lg appearance-none cursor-pointer accent-white hover:accent-blue-500 focus:outline-none transition-all duration-200"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Right: Speed, Fullscreen */}
+                    <div className="flex items-center gap-3 relative">
+                      {/* Playback Speed selector */}
+                      <div className="relative">
+                        <button
+                          onClick={() => setShowSpeedMenu(!showSpeedMenu)}
+                          className="text-[11px] font-mono font-bold px-2 py-1 bg-white/10 hover:bg-white/20 border border-white/5 rounded-lg cursor-pointer transition-colors"
+                        >
+                          {videoSpeed === 1 ? "1.0x" : `${videoSpeed}x`}
+                        </button>
+
+                        {showSpeedMenu && (
+                          <div className="absolute bottom-full right-0 mb-2 py-1.5 w-20 rounded-xl border border-white/10 bg-slate-900/90 backdrop-blur-lg shadow-xl text-white/95 flex flex-col z-35 animate-in fade-in slide-in-from-bottom-2 duration-150">
+                            {[0.5, 1, 1.25, 1.5, 2].map((sp) => (
+                              <button
+                                key={sp}
+                                onClick={() => handleVideoSpeedChange(sp)}
+                                className={`px-3 py-1 text-left text-[11px] font-mono hover:bg-white/10 transition-colors w-full cursor-pointer ${
+                                  videoSpeed === sp ? "text-blue-400 font-bold" : ""
+                                }`}
+                              >
+                                {sp === 1 ? "1.0x" : `${sp}x`}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <button
+                        onClick={handleVideoFullscreen}
+                        className="p-1 hover:bg-white/10 rounded-lg transition-colors cursor-pointer text-white/85 hover:text-white"
+                      >
+                        {isVideoFullscreen ? <Minimize className="h-4.5 w-4.5" /> : <Maximize className="h-4.5 w-4.5" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* AUDIO */}
+            {isAudio && contentUrl && !mediaError && (
+              <div className="w-full h-full flex items-center justify-center p-6 bg-slate-950/5 animate-in fade-in duration-200">
+                {/* Audio Element */}
+                <audio
+                  ref={audioRef}
+                  src={contentUrl}
+                  preload="metadata"
+                  autoPlay
+                  onPlay={() => setIsAudioPlaying(true)}
+                  onPause={() => setIsAudioPlaying(false)}
+                  onTimeUpdate={handleAudioTimeUpdate}
+                  onLoadedMetadata={handleAudioLoadedMetadata}
+                  onError={handleMediaError}
+                />
+
+                {/* Inline Styles for visualizer and rotation animation */}
+                <style>{`
+                  @keyframes audio-spin {
+                    from { transform: rotate(0deg); }
+                    to { transform: rotate(360deg); }
+                  }
+                  @keyframes bounce-bar-1 { 0% { height: 15%; } 100% { height: 75%; } }
+                  @keyframes bounce-bar-2 { 0% { height: 30%; } 100% { height: 95%; } }
+                  @keyframes bounce-bar-3 { 0% { height: 20%; } 100% { height: 60%; } }
+                  @keyframes bounce-bar-4 { 0% { height: 40%; } 100% { height: 85%; } }
+                  @keyframes bounce-bar-5 { 0% { height: 10%; } 100% { height: 100%; } }
+                `}</style>
+
+                {/* Glassmorphic Music Card */}
+                <div
+                  className={`flex flex-col items-center gap-6 p-8 rounded-3xl max-w-sm w-full border backdrop-blur-lg shadow-2xl transition-all duration-350 ${
+                    isDark
+                      ? "bg-slate-900/60 border-slate-800/40 shadow-[0_0_50px_rgba(20,184,166,0.15)]"
+                      : "bg-white/60 border-slate-200/50 shadow-[0_0_40px_rgba(20,184,166,0.1)]"
+                  }`}
+                >
+                  {/* Vinyl/CD Disc Layout */}
+                  <div className="relative group select-none">
+                    {/* Outer glowing border */}
+                    <div
+                      className={`h-40 w-40 rounded-full flex items-center justify-center bg-slate-950/95 dark:bg-black/90 relative shadow-2xl transition-transform duration-300 ${
+                        isAudioPlaying ? "scale-105" : "scale-100"
+                      }`}
+                      style={{
+                        backgroundImage: "radial-gradient(circle, #27272a 1px, transparent 1px), radial-gradient(circle, #09090b 70%, transparent 70%)",
+                        backgroundSize: "6px 6px, 100% 100%",
+                        animation: "audio-spin 12s linear infinite",
+                        animationPlayState: isAudioPlaying ? "running" : "paused",
+                        border: "5px solid rgba(255,255,255,0.03)",
+                      }}
+                    >
+                      {/* Vinyl grooves lines (repeated concentric circles) */}
+                      <div className="absolute inset-4 rounded-full border border-white/5" />
+                      <div className="absolute inset-8 rounded-full border border-white/5" />
+                      <div className="absolute inset-12 rounded-full border border-white/5" />
+
+                      {/* Disc Center Label */}
+                      <div
+                        className="h-16 w-16 rounded-full flex items-center justify-center text-teal-400 relative"
+                        style={{
+                          background: "linear-gradient(135deg, #134e4a 0%, #115e59 100%)",
+                          boxShadow: "inset 0 2px 4px rgba(255,255,255,0.2)",
+                        }}
+                      >
+                        <Music className="h-6 w-6 animate-pulse" style={{ animationPlayState: isAudioPlaying ? "running" : "paused" }} />
+                        {/* Spindle hole */}
+                        <div className="absolute h-3 w-3 rounded-full bg-slate-950 dark:bg-black border border-white/10" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Equalizer Waveform Bouncing Bars */}
+                  <div className="flex items-end justify-center gap-1.5 h-10 px-4 w-full">
+                    {[1, 2, 3, 4, 5, 4, 3, 2, 1].map((_, i) => {
+                      const animName = `bounce-bar-${(i % 5) + 1}`;
+                      return (
+                        <div
+                          key={i}
+                          className="w-1 bg-teal-500 dark:bg-teal-400 rounded-t-full transition-all duration-300"
+                          style={{
+                            height: isAudioPlaying ? "100%" : "20%",
+                            animation: isAudioPlaying ? `${animName} 0.8s ease-in-out infinite alternate` : "none",
+                            animationDelay: `${i * 0.1}s`,
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+
+                  {/* Track Info */}
+                  <div className="text-center min-w-0 w-full">
+                    <p
+                      className="text-[15px] font-bold truncate leading-snug"
+                      style={{ color: colors.text }}
+                    >
+                      {file.name}
+                    </p>
+                    <p className="text-[11px] font-semibold mt-1 flex items-center justify-center gap-1.5" style={{ color: colors.muted }}>
+                      <span className="h-1.5 w-1.5 rounded-full bg-teal-500 animate-ping" style={{ animationPlayState: isAudioPlaying ? "running" : "paused" }} />
+                      {t("media.audioTrack")}
+                    </p>
+                  </div>
+
+                  {/* Seek Bar & Duration */}
+                  <div className="flex flex-col gap-1.5 w-full">
+                    <input
+                      type="range"
+                      min={0}
+                      max={audioDuration || 100}
+                      step={0.1}
+                      value={audioCurrentTime}
+                      onChange={handleAudioSeek}
+                      className="w-full h-1 bg-slate-200 dark:bg-[#161719] rounded-lg appearance-none cursor-pointer accent-teal-500 dark:accent-teal-400 focus:outline-none"
+                    />
+                    <div className="flex items-center justify-between text-[10px] font-mono" style={{ color: colors.muted }}>
+                      <span>{formatTime(audioCurrentTime)}</span>
+                      <span>{formatTime(audioDuration)}</span>
+                    </div>
+                  </div>
+
+                  {/* Primary Playback controls */}
+                  <div className="flex items-center justify-center gap-5 w-full">
+                    <button
+                      onClick={() => skipAudio(-10)}
+                      title={t("media.skipBack")}
+                      className="p-2 hover:bg-slate-100 dark:hover:bg-[#1f2124] rounded-xl transition-colors cursor-pointer"
+                      style={{ color: colors.muted }}
+                    >
+                      <SkipBack className="h-5 w-5" />
+                    </button>
+
+                    <button
+                      onClick={togglePlayAudio}
+                      className="h-14 w-14 flex items-center justify-center rounded-full bg-teal-500 hover:bg-teal-400 hover:scale-105 active:scale-95 text-white cursor-pointer shadow-lg transition-all duration-200"
+                    >
+                      {isAudioPlaying ? (
+                        <Pause className="h-5.5 w-5.5 fill-white" />
+                      ) : (
+                        <Play className="h-5.5 w-5.5 fill-white ml-1" />
+                      )}
+                    </button>
+
+                    <button
+                      onClick={() => skipAudio(10)}
+                      title={t("media.skipForward")}
+                      className="p-2 hover:bg-slate-100 dark:hover:bg-[#1f2124] rounded-xl transition-colors cursor-pointer"
+                      style={{ color: colors.muted }}
+                    >
+                      <SkipForward className="h-5 w-5" />
+                    </button>
+                  </div>
+
+                  {/* Secondary controls (Volume + Speed) */}
+                  <div className="flex items-center justify-between w-full mt-2 border-t pt-4" style={{ borderColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)" }}>
+                    {/* Volume */}
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={toggleAudioMute}
+                        className="p-1 hover:bg-slate-100 dark:hover:bg-[#1f2124] rounded-lg transition-colors cursor-pointer"
+                        style={{ color: colors.muted }}
+                      >
+                        {isAudioMuted || audioVolume === 0 ? (
+                          <VolumeX className="h-4 w-4" />
+                        ) : (
+                          <Volume2 className="h-4 w-4" />
+                        )}
+                      </button>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={isAudioMuted ? 0 : audioVolume}
+                        onChange={handleAudioVolumeChange}
+                        className="w-16 h-1 bg-slate-200 dark:bg-[#161719] rounded-lg appearance-none cursor-pointer accent-teal-500 dark:accent-teal-400 focus:outline-none"
+                      />
+                    </div>
+
+                    {/* Speed dropdown */}
+                    <div className="relative">
+                      <button
+                        onClick={() => setShowAudioSpeedMenu(!showAudioSpeedMenu)}
+                        className="text-[10px] font-mono font-bold px-2.5 py-1 bg-slate-100 dark:bg-[#161719] border border-slate-200/50 dark:border-white/[0.06] rounded-lg cursor-pointer transition-colors hover:dark:bg-[#1f2124]"
+                        style={{ color: colors.text }}
+                      >
+                        {audioSpeed === 1 ? "1.0x" : `${audioSpeed}x`}
+                      </button>
+
+                      {showAudioSpeedMenu && (
+                        <div
+                          className={`absolute bottom-full right-0 mb-2 py-1 w-20 rounded-xl border shadow-xl flex flex-col z-35 animate-in fade-in slide-in-from-bottom-2 duration-150 ${
+                            isDark
+                              ? "bg-[#141518] border-white/[0.06] text-white"
+                              : "bg-white border-slate-200 text-slate-800"
+                          }`}
+                        >
+                          {[0.5, 1, 1.25, 1.5, 2].map((sp) => (
+                            <button
+                              key={sp}
+                              onClick={() => handleAudioSpeedChange(sp)}
+                              className={`px-3 py-1 text-left text-[11px] font-mono hover:bg-slate-100 dark:hover:bg-[#1f2124] transition-colors w-full cursor-pointer ${
+                                audioSpeed === sp
+                                  ? "text-teal-500 font-bold"
+                                  : isDark
+                                  ? "text-slate-400"
+                                  : "text-slate-600"
+                              }`}
+                            >
+                              {sp === 1 ? "1.0x" : `${sp}x`}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* PDF */}
+            {isPdf && (
+              <div className="absolute inset-0 w-full h-full flex flex-col">
+                <PdfErrorBoundary onRetry={() => setPdfData(pdfBufferRef.current ? new Uint8Array(pdfBufferRef.current) : null)}>
+                  <PdfViewer
+                    data={pdfData || pdfBufferRef.current}
+                    url={pdfUrl}
+                    fileName={file.name}
+                    onOpenSystemApp={handleOpenInSystemApp}
+                  />
+                </PdfErrorBoundary>
+              </div>
+            )}
+
+            {/* MARKDOWN — Elevated Document Sheet */}
+            {isMarkdownPreview && (
+              <RichDocumentSheet htmlContent={markdownHtml} isDark={isDark} />
+            )}
+
+            {/* RICH DOCUMENTS (DOCX, ODT, RTF, EPUB) */}
+            {isRichDocView && (
+              <RichDocumentSheet htmlContent={richDocHtml} isDark={isDark} />
+            )}
+
+            {/* PRESENTATIONS (PPTX, ODP) */}
+            {isPresentationView && (
+              <RichDocumentSheet slides={presentationSlides} isDark={isDark} />
+            )}
+
+            {/* SANDBOXED HTML PREVIEW */}
+            {isHtmlPreview && textContent !== null && (
+              <iframe
+                sandbox=""
+                srcDoc={textContent}
+                title={currentFile.name}
+                className="w-full h-full border-0 bg-white"
+              />
+            )}
+
+            {/* CSV / TSV / XLSX / ODS — Interactive Spreadsheet Grid */}
+            {isTableView && activeTableContent !== null && (
+              <div className="absolute inset-0 flex flex-col">
+                {workbookSheets && workbookSheets.length > 1 && (
+                  <div className="shrink-0 flex items-center gap-1 px-3 py-1.5 border-b border-slate-200 dark:border-white/[0.06] bg-slate-50 dark:bg-[#111214] overflow-x-auto no-scrollbar">
+                    {workbookSheets.map((sheet, idx) => (
+                      <button
+                        key={`${sheet.name}-${idx}`}
+                        onClick={() => setActiveSheetIdx(idx)}
+                        className={`px-3 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
+                          idx === activeSheetIdx
+                            ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30"
+                            : "text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-white/[0.05]"
+                        }`}
+                      >
+                        {sheet.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="flex-1 min-h-0 relative">
+                  <CsvTableViewer
+                    content={activeTableContent}
+                    isTsv={isTsvFile && !isWorkbookFile}
+                    isDark={isDark}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* CODE — Edit Mode */}
+            {isCode && isEditMode && (
+              <CodeEditor
+                value={editContent}
+                onChange={setEditContent}
+                fileName={file.name}
+                onCursorChange={setCursorPos}
+                className="absolute inset-0"
+              />
+            )}
+
+            {/* CODE / SOURCE — Read Mode */}
+            {isCode && !isEditMode && (
+              <SyntaxHighlighter
+                code={activeTableContent ?? textContent ?? ""}
+                fileName={isWorkbookFile ? `${file.name}.csv` : file.name}
+                wrapLines={wrapLines}
+                fontSize={codeFontSize}
+                className="absolute inset-0"
+              />
+            )}
+
+            {/* INSPECTABLE ARCHIVE EXPLORER */}
+            {isArchiveExplorer && (
+              <ArchiveExplorer
+                fileName={currentFile.name}
+                archiveSize={currentFile.size}
+                entries={archiveEntries!}
+                isDark={isDark}
+                onOpenSystemApp={handleOpenInSystemApp}
+                onDownloadArchive={handleDownload}
+              />
+            )}
+
+            {/* ARCHIVE PREVIEW CARD (non-inspectable / oversized) */}
+            {isArchive && !isArchiveExplorer && !textContent && !contentUrl && (
+              <div className="w-full h-full flex items-center justify-center p-6">
+                <div
+                  className="flex flex-col items-center max-w-md w-full p-8 rounded-3xl text-center shadow-sm"
+                  style={{
+                    background: isDark ? "#111214" : "#ffffff",
+                    border: `1px solid ${colors.border}`,
+                  }}
+                >
+                  <div className="h-16 w-16 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center mb-4">
+                    <FolderArchive className="h-8 w-8" />
+                  </div>
+                  <h3 className="text-base font-bold mb-1 truncate max-w-full" style={{ color: colors.text }}>
+                    {currentFile.name}
+                  </h3>
+                  <div className="flex items-center gap-2 mb-4">
+                    <span className="text-[11px] font-mono px-2 py-0.5 rounded-md font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                      {t("archive.badge", { ext: ext.toUpperCase() })}
+                    </span>
+                    <span className="text-[11px] font-mono" style={{ color: colors.muted }}>
+                      {formatSize(currentFile.size)}
+                    </span>
+                  </div>
+                  <p className="text-xs leading-relaxed mb-6" style={{ color: colors.muted }}>
+                    {t("archive.description")}
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={handleOpenInSystemApp}
+                      className="flex items-center gap-2 px-6 py-2.5 rounded-full text-xs font-semibold bg-[#0b57d0] hover:bg-[#0842a0] text-white shadow-xs transition-colors cursor-pointer"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      {t("archive.openInSystem", "Open in System App")}
+                    </button>
+                    <button
+                      onClick={handleDownload}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer"
+                    >
+                      <Download className="h-4 w-4" />
+                      {t("archive.download")}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* UNSUPPORTED BINARY FILE */}
+            {!isImage &&
+              !isSvgImageView &&
+              !isVideo &&
+              !isAudio &&
+              !isPdf &&
+              !isMarkdownPreview &&
+              !isRichDocView &&
+              !isPresentationView &&
+              !isHtmlPreview &&
+              !isTableView &&
+              !isCode &&
+              !isArchive &&
+              !isArchiveExplorer && (
+              <div className="w-full h-full flex items-center justify-center p-6">
+                <div
+                  className="flex flex-col items-center max-w-md w-full p-8 rounded-3xl text-center shadow-sm"
+                  style={{
+                    background: isDark ? "#111214" : "#ffffff",
+                    border: `1px solid ${colors.border}`,
+                  }}
+                >
+                  <div className="h-16 w-16 rounded-2xl bg-slate-100 dark:bg-[#161719] text-slate-500 dark:text-slate-400 flex items-center justify-center mb-4">
+                    <FallbackIcon className="h-8 w-8" strokeWidth={1.5} />
+                  </div>
+                  <h3 className="text-base font-bold mb-1 truncate max-w-full" style={{ color: colors.text }}>
+                    {currentFile.name}
+                  </h3>
+                  <div className="flex items-center gap-2 mb-4">
+                    <code className="text-[11px] font-mono px-2 py-0.5 rounded-md font-semibold" style={{ background: colors.badgeBg, color: colors.badgeText }}>
+                      {currentFile.mime || "application/octet-stream"}
+                    </code>
+                    <span className="text-[11px] font-mono" style={{ color: colors.muted }}>
+                      {formatSize(currentFile.size)}
+                    </span>
+                  </div>
+                  <p className="text-xs leading-relaxed mb-6" style={{ color: colors.muted }}>
+                    {t("unsupported.description")}
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={handleOpenInSystemApp}
+                      className="flex items-center gap-2 px-6 py-2.5 rounded-full text-xs font-semibold bg-[#0b57d0] hover:bg-[#0842a0] text-white shadow-xs transition-colors cursor-pointer"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      {t("unsupported.openInSystem", "Open in System App")}
+                    </button>
+                    <button
+                      onClick={handleDownload}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer"
+                    >
+                      <Download className="h-4 w-4" />
+                      {t("unsupported.download")}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Status bar ───────────────────────────────────────────────────── */}
+      {(isCode || isMarkdownFile || isHtmlFile || isTableData || isPresentationView || isEditMode) && !loading && !error && (textContent !== null || isWorkbookFile || isPresentationView) ? (
+        <div
+          className="flex items-center justify-between px-3 sm:px-4 shrink-0 select-none overflow-x-auto no-scrollbar pb-[env(safe-area-inset-bottom,0px)]"
+          style={{
+            height: "calc(26px + env(safe-area-inset-bottom, 0px))",
+            background: colors.statusbar,
+            borderTop: `1px solid ${colors.border}`,
+          }}
+        >
+          <div className="flex items-center gap-2 sm:gap-3 whitespace-nowrap">
+            {statusParts.map((part, i) => (
+              <span key={i} className="text-[10px] sm:text-[11px] font-mono tracking-tight" style={{ color: colors.muted }}>
+                {part}
+              </span>
+            ))}
+          </div>
+          {isEditMode && (
+            <span className="text-[10px] sm:text-[11px] font-mono whitespace-nowrap pl-2 hidden xs:inline" style={{ color: isDark ? "#4b5563" : "#94a3b8" }}>
+              {t("status.editorInfo")}
+            </span>
+          )}
+        </div>
+      ) : (
+        <div className="h-[env(safe-area-inset-bottom,0px)] shrink-0" />
+      )}
+    </div>
+  );
+}

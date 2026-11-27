@@ -1,0 +1,24 @@
+{
+  "starPrompt": {
+    "title": "Vous appréciez TeleDrive ? ✨",
+    "description": "Si TeleDrive vous a fait gagner du temps ou économiser des coûts de stockage, laisser une ⭐ sur GitHub aide plus de personnes à le découvrir et soutient le projet.",
+    "starButton": "⭐ Étoiler sur GitHub",
+    "maybeLater": "Peut-être plus tard",
+    "dontAskAgain": "Ne plus demander"
+  },
+  "whatsNew": {
+    "title": "Nouveautés de TeleDrive",
+    "badge": "v{{version}}",
+    "features": [
+      "Coffre Multi-Comptes Renforcé — Clés de compte générées automatiquement avec isolation fiable entre sessions",
+      "Transferts >2/4 Go reprenables — Reprise sur point d'arrêt, découpage multi-segments et déduplication SHA-256",
+      "Démarrage instantané & 3× pipelining — Cache IndexedDB, Catalogue v3 et flux MTProto parallèles",
+      "Aperçu universel & vignettes — DOCX, ODT, RTF, EPUB, XLSX/ODS, PPTX/ODP, ZIP/TAR, HTML et vignettes PDF/vidéo",
+      "Synchronisation multiplateforme — Performances Tauri v2 optimisées et 11 langues prises en charge"
+    ],
+    "starCta": "Vous aimez la mise à jour ? Donnez-nous une ⭐",
+    "starButton": "⭐ Étoiler sur GitHub",
+    "close": "Fermer",
+    "subtitle": "Nouveautés de TeleDrive v0.1.4"
+  }
+}

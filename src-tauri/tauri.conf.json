@@ -1,0 +1,102 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "TeleDrive",
+  "mainBinaryName": "TeleDrive",
+  "version": "0.1.5",
+  "identifier": "com.teledrive.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "TeleDrive",
+        "title": "TeleDrive",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 375,
+        "minHeight": 600,
+        "dragDropEnabled": false,
+        "create": false
+      }
+    ],
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPLOCALDATA/preview_cache/**",
+          "$APPDATA/preview_cache/**",
+          "$APPLOCALDATA/offline_files/**"
+        ]
+      },
+      "csp": "default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' blob: data: asset: http://asset.localhost https://asset.localhost https://*.telegram.org; media-src 'self' blob: data: asset: http://asset.localhost https://asset.localhost https://*.telegram.org; connect-src 'self' asset: http://asset.localhost https://asset.localhost wss://*.telegram.org https://*.telegram.org https://api.github.com https://raw.githubusercontent.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none';",
+      "devCsp": "default-src 'self' tauri: localhost: http://localhost:1420 http://127.0.0.1:1420; script-src 'self' 'unsafe-eval' 'unsafe-inline' localhost:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' blob: data: asset: http://asset.localhost https://asset.localhost https://*.telegram.org; media-src 'self' blob: data: asset: http://asset.localhost https://asset.localhost https://*.telegram.org; connect-src 'self' asset: http://asset.localhost https://asset.localhost wss://*.telegram.org https://*.telegram.org ws://localhost:1420 ws://127.0.0.1:1420 http://localhost:1420 http://127.0.0.1:1420 https://api.github.com https://raw.githubusercontent.com;"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "copyright": "Copyright © 2026 TeleDrive. All rights reserved.",
+    "category": "Utility",
+    "shortDescription": "Fast, unlimited cloud storage powered by Telegram",
+    "longDescription": "TeleDrive is a modern, cross-platform desktop cloud storage client leveraging the Telegram API for secure, fast, and free storage.",
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "dmg": {
+        "background": "icons/dmg-background.png",
+        "windowSize": {
+          "width": 660,
+          "height": 428
+        },
+        "appPosition": {
+          "x": 165,
+          "y": 215
+        },
+        "applicationFolderPosition": {
+          "x": 495,
+          "y": 215
+        }
+      }
+    },
+    "windows": {
+      "nsis": {
+        "sidebarImage": "icons/nsis-sidebar.bmp",
+        "headerImage": "icons/nsis-header.bmp",
+        "languages": ["English"],
+        "displayLanguageSelector": false,
+        "installerHooks": "windows/hooks.nsh"
+      },
+      "wix": {
+        "language": "en-US"
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": []
+      },
+      "rpm": {
+        "depends": []
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
+    "android": {
+      "minSdkVersion": 24
+    }
+  }
+}

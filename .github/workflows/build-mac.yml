@@ -1,0 +1,125 @@
+name: Build macOS DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_arch:
+        description: 'Target architecture (universal, aarch64, x86_64)'
+        required: false
+        default: 'universal'
+        type: choice
+        options:
+          - universal
+          - aarch64
+          - x86_64
+
+concurrency:
+  group: build-mac-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-mac:
+    name: Build macOS Universal DMG
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Set up Python and dmgbuild for polished DMG packaging
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dmgbuild
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install dmgbuild ds_store mac_alias
+
+      - name: Build Tauri macOS app
+        env:
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
+        run: |
+          TARGET_FLAG="--target universal-apple-darwin"
+          if [ "${{ github.event.inputs.target_arch }}" = "aarch64" ]; then
+            TARGET_FLAG="--target aarch64-apple-darwin"
+          elif [ "${{ github.event.inputs.target_arch }}" = "x86_64" ]; then
+            TARGET_FLAG="--target x86_64-apple-darwin"
+          fi
+          echo "Building with $TARGET_FLAG..."
+          npx tauri build $TARGET_FLAG --bundles app,dmg
+
+      - name: Organize deliverables into distribution/v<version>/
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          DIST_DIR="distribution/v${VERSION}"
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "DIST_DIR=${DIST_DIR}" >> $GITHUB_ENV
+          mkdir -p "$DIST_DIR"
+
+          echo "Locating built TeleDrive.app..."
+          APP_PATH=$(find src-tauri/target -name "TeleDrive.app" -type d 2>/dev/null | head -n 1)
+
+          DMG_FALLBACK=$(find src-tauri/target -name "*.dmg" -not -name "rw.*" 2>/dev/null | head -n 1)
+
+          if [ -d "$APP_PATH" ] && python3 -c "import dmgbuild" 2>/dev/null; then
+            echo "Packaging custom DMG using dmgbuild ($APP_PATH)..."
+            export TELEDRIVE_APP_PATH="$APP_PATH"
+            export REPO_ROOT="$(pwd)"
+            python3 -m dmgbuild -s scripts/dmg_settings.py "TeleDrive" "$DIST_DIR/teledrive.dmg" || {
+              echo "Warning: dmgbuild failed; copying fallback DMG $DMG_FALLBACK"
+              cp "$DMG_FALLBACK" "$DIST_DIR/teledrive.dmg"
+            }
+            echo "✓ Staged $DIST_DIR/teledrive.dmg"
+          elif [ -n "$DMG_FALLBACK" ]; then
+            cp "$DMG_FALLBACK" "$DIST_DIR/teledrive.dmg"
+            echo "✓ Staged fallback $DMG_FALLBACK -> $DIST_DIR/teledrive.dmg"
+          else
+            echo "::error::Neither TeleDrive.app nor DMG file found in src-tauri/target"
+            exit 1
+          fi
+
+          # Clean any old duplicate files from distribution root
+          rm -f distribution/TeleDrive_* distribution/teledrive.dmg 2>/dev/null || true
+
+          # Generate checksum
+          cd "$DIST_DIR"
+          shasum -a 256 teledrive.dmg > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          cd -
+
+          ls -lh "$DIST_DIR"
+
+      - name: Upload macOS DMG artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: teledrive-macos-v${{ env.VERSION }}
+          path: |
+            ${{ env.DIST_DIR }}/teledrive.dmg
+            ${{ env.DIST_DIR }}/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+

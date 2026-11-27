@@ -1,0 +1,56 @@
+import "./lib/telegram/buffer-shim";
+import { logger } from "@/lib/logger";
+import React from "react";
+import ReactDOM from "react-dom/client";
+import "./i18n";
+import App from "./App";
+import "./index.css";
+import { initVault } from "./lib/secure/vault";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+
+import { initPlatform } from "./lib/platform";
+
+logger.log("main.tsx: Loaded entrypoint script");
+initPlatform();
+
+// Mount React immediately to prevent blank white screens
+const rootElement = document.getElementById("root");
+if (rootElement) {
+  ReactDOM.createRoot(rootElement).render(
+    <React.StrictMode>
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
+    </React.StrictMode>,
+  );
+  (window as unknown as { __TELEDRIVE_MOUNTED__?: boolean }).__TELEDRIVE_MOUNTED__ = true;
+  logger.log("main.tsx: React root mounted immediately.");
+} else {
+  logger.error("main.tsx: Root element not found in DOM!");
+}
+
+// Initialize vault in the background
+logger.log("main.tsx: Initializing vault in background...");
+initVault()
+  .then(() => {
+    logger.log("main.tsx: Vault initialized successfully in background.");
+  })
+  .catch((err) => {
+    logger.error("main.tsx: Vault initialization failed in background:", err);
+  });
+
+// In production, prevent the default browser context menu on empty window spaces
+// while preserving native input interactions, text selection, and Radix menus.
+if (!import.meta.env.DEV) {
+  document.addEventListener("contextmenu", (e) => {
+    const target = e.target as HTMLElement | null;
+    if (
+      target?.closest("input, textarea, [contenteditable='true'], [data-radix-menu-content], [data-radix-context-menu-trigger]") ||
+      (window.getSelection()?.toString().length ?? 0) > 0
+    ) {
+      return;
+    }
+    e.preventDefault();
+  });
+}
+

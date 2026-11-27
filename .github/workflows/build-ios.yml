@@ -1,0 +1,221 @@
+name: Build iOS IPA & Simulator
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_target:
+        description: 'Build target (all, device, simulator)'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - device
+          - simulator
+
+concurrency:
+  group: build-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios:
+    name: Build iOS App & IPA
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Ensure Xcode build environment
+        run: |
+          echo "=== Xcode version ==="
+          xcodebuild -version
+          
+          which xcodegen || brew install xcodegen
+          
+          # Make sure node, npm, cargo, and rustc are in standard paths for Xcode script phases
+          sudo mkdir -p /usr/local/bin
+          sudo ln -sf $(which node) /usr/local/bin/node || true
+          sudo ln -sf $(which npm) /usr/local/bin/npm || true
+          sudo ln -sf $(which cargo) /usr/local/bin/cargo || true
+          sudo ln -sf $(which rustc) /usr/local/bin/rustc || true
+          sudo ln -sf $(which xcodegen) /usr/local/bin/xcodegen || true
+          
+          # Ensure subshells inherit Homebrew and Cargo bin paths
+          echo "/opt/homebrew/bin" | sudo tee -a /etc/paths >/dev/null || true
+          echo "$HOME/.cargo/bin" | sudo tee -a /etc/paths >/dev/null || true
+
+      - name: Initialize and regenerate iOS project
+        run: |
+          npm run tauri ios init -- --ci --skip-targets-install
+          # Force Xcode project to adhere to projectFormat: xcode14_0 (objectVersion 56)
+          xcodegen generate --spec src-tauri/gen/apple/project.yml
+          grep "objectVersion" src-tauri/gen/apple/teledrive.xcodeproj/project.pbxproj
+
+      - name: Build iOS App (Device - aarch64)
+        id: build_device
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_target == 'all' || github.event.inputs.build_target == 'device' }}
+        continue-on-error: true
+        run: |
+          echo "Building iOS physical device application..."
+          npx tauri ios build --target aarch64 --no-sign --debug --ci
+
+      - name: Build iOS App (Simulator - aarch64-sim)
+        if: ${{ github.event.inputs.build_target == 'all' || github.event.inputs.build_target == 'simulator' || steps.build_device.outcome != 'success' }}
+        continue-on-error: true
+        run: |
+          echo "Building iOS simulator application..."
+          npx tauri ios build --target aarch64-sim --debug --ci
+
+      - name: Package Deliverables (Direct .IPA and Simulator App)
+        continue-on-error: true
+        run: |
+          mkdir -p release-dist/ios
+          VERSION=$(node -p "require('./package.json').version")
+          echo "Packaging iOS installation deliverables for version v${VERSION}..."
+          
+          is_valid_app() {
+            [ -n "$1" ] && [ -d "$1" ] && [ -f "$1/Info.plist" ] && [ -f "$1/TeleDrive" ]
+          }
+
+          DEVICE_IPA=""
+          # 1. Look for direct device IPA produced by Tauri
+          for cand_ipa in \
+            "src-tauri/gen/apple/build/arm64/TeleDrive.ipa" \
+            $(find src-tauri/gen/apple/build src-tauri/target -name "*.ipa" -not -path "*simulator*" -not -path "*sim*" 2>/dev/null); do
+            if [ -f "$cand_ipa" ] && [ -s "$cand_ipa" ]; then
+              DEVICE_IPA="$cand_ipa"
+              break
+            fi
+          done
+
+          DEVICE_APP=""
+          # 2. Search for a valid device .app bundle (*iphoneos*)
+          for cand_app in \
+            "src-tauri/gen/apple/build/arm64/TeleDrive.app" \
+            $(find build/derivedData src-tauri/gen/apple ~/Library/Developer/Xcode/DerivedData -name "TeleDrive.app" -path "*iphoneos*" 2>/dev/null); do
+            if is_valid_app "$cand_app"; then
+              DEVICE_APP="$cand_app"
+              break
+            fi
+          done
+
+          # NOTE: We deliberately DO NOT fall back to simulator build for teledrive.ipa!
+          # Packaging simulator binaries into .ipa causes immediate crash on physical iOS devices
+          # with "mach-o file, but incompatible platform (have 'iOS-simulator', need 'iOS')".
+
+          if [ -n "$DEVICE_IPA" ]; then
+            echo "✓ Found physical device IPA at: $DEVICE_IPA ($(du -sh "$DEVICE_IPA" | cut -f1))"
+            TMP_STAGE=$(mktemp -d)
+            unzip -q "$DEVICE_IPA" -d "$TMP_STAGE"
+            APP_EXTRACTED=$(find "$TMP_STAGE/Payload" -maxdepth 1 -name "*.app" 2>/dev/null | head -n 1)
+            if is_valid_app "$APP_EXTRACTED"; then
+              echo "✓ Extracted valid device .app from IPA: $APP_EXTRACTED"
+              codesign --force --deep --sign - "$APP_EXTRACTED" 2>/dev/null || true
+              (cd "$TMP_STAGE" && zip -r -q "$GITHUB_WORKSPACE/release-dist/ios/teledrive.ipa" Payload)
+              cp "$GITHUB_WORKSPACE/release-dist/ios/teledrive.ipa" "$GITHUB_WORKSPACE/release-dist/teledrive.ipa"
+              cp "$GITHUB_WORKSPACE/release-dist/ios/teledrive.ipa" "$GITHUB_WORKSPACE/release-dist/ios/teledrive-v${VERSION}.ipa"
+              cp "$GITHUB_WORKSPACE/release-dist/ios/teledrive.ipa" "$GITHUB_WORKSPACE/release-dist/teledrive-v${VERSION}.ipa"
+              echo "✓ Successfully staged physical device teledrive.ipa"
+            else
+              echo "::error::Extracted IPA did not contain a valid .app bundle inside Payload!"
+            fi
+            rm -rf "$TMP_STAGE"
+          elif [ -n "$DEVICE_APP" ]; then
+            echo "✓ Found valid device .app bundle at: $DEVICE_APP ($(du -sh "$DEVICE_APP" | cut -f1))"
+            codesign --force --deep --sign - "$DEVICE_APP" 2>/dev/null || true
+            TMP_DIR=$(mktemp -d)
+            mkdir -p "$TMP_DIR/Payload"
+            cp -R "$DEVICE_APP" "$TMP_DIR/Payload/"
+            (cd "$TMP_DIR" && zip -r -q "$GITHUB_WORKSPACE/release-dist/ios/teledrive.ipa" Payload)
+            cp "$GITHUB_WORKSPACE/release-dist/ios/teledrive.ipa" "$GITHUB_WORKSPACE/release-dist/teledrive.ipa"
+            cp "$GITHUB_WORKSPACE/release-dist/ios/teledrive.ipa" "$GITHUB_WORKSPACE/release-dist/ios/teledrive-v${VERSION}.ipa"
+            cp "$GITHUB_WORKSPACE/release-dist/ios/teledrive.ipa" "$GITHUB_WORKSPACE/release-dist/teledrive-v${VERSION}.ipa"
+            rm -rf "$TMP_DIR"
+            echo "✓ Successfully staged physical device teledrive.ipa"
+          else
+            echo "::error::No physical iOS device build (.ipa or iphoneos .app) found. teledrive.ipa will NOT be staged with a simulator build."
+          fi
+
+          # Verification Gate: Ensure teledrive.ipa is strictly compiled for physical iOS (platform 2), never simulator (platform 7)
+          if [ -f "$GITHUB_WORKSPACE/release-dist/ios/teledrive.ipa" ]; then
+            IPA_SIZE=$(stat -f%z "$GITHUB_WORKSPACE/release-dist/ios/teledrive.ipa" 2>/dev/null || stat -c%s "$GITHUB_WORKSPACE/release-dist/ios/teledrive.ipa" 2>/dev/null || echo "0")
+            echo "Device IPA size: $IPA_SIZE bytes"
+            TMP_VERIFY=$(mktemp -d)
+            unzip -q "$GITHUB_WORKSPACE/release-dist/ios/teledrive.ipa" -d "$TMP_VERIFY"
+            APP_VERIFY=$(find "$TMP_VERIFY/Payload" -maxdepth 1 -name "*.app" 2>/dev/null | head -n 1)
+            if [ -n "$APP_VERIFY" ] && [ -f "$APP_VERIFY/TeleDrive" ]; then
+              PLATFORM_ID=$(otool -l "$APP_VERIFY/TeleDrive" | awk '/LC_BUILD_VERSION/{getline; getline; print $2}' | head -n 1 | tr -d '[:space:]')
+              echo "Mach-O LC_BUILD_VERSION platform ID: '$PLATFORM_ID'"
+              if [ "$PLATFORM_ID" = "7" ]; then
+                echo "::error::FATAL: teledrive.ipa contains an iOS-simulator Mach-O binary (platform 7)! Rejecting build."
+                rm -f "$GITHUB_WORKSPACE/release-dist/ios/teledrive.ipa" "$GITHUB_WORKSPACE/release-dist/teledrive.ipa"
+                rm -f "$GITHUB_WORKSPACE/release-dist/ios/teledrive-v${VERSION}.ipa" "$GITHUB_WORKSPACE/release-dist/teledrive-v${VERSION}.ipa"
+                exit 1
+              elif [ "$PLATFORM_ID" = "2" ]; then
+                echo "✓ Verified teledrive.ipa is compiled for real iOS physical devices (platform 2 / PLATFORM_IOS)."
+              else
+                echo "::warning::Unrecognized or multi-arch platform ID: $PLATFORM_ID."
+              fi
+            else
+              echo "::error::Verification failed: TeleDrive binary missing from staged teledrive.ipa!"
+              exit 1
+            fi
+            rm -rf "$TMP_VERIFY"
+          fi
+
+          # Optional companion: package simulator app zip if simulator was built
+          SIM_APP="src-tauri/gen/apple/build/arm64-sim/TeleDrive.app"
+          if [ ! -d "$SIM_APP" ]; then
+            SIM_APP=$(find src-tauri/gen/apple/build ~/Library/Developer/Xcode/DerivedData -name "TeleDrive.app" -path "*iphonesimulator*" 2>/dev/null | head -n 1)
+          fi
+          if is_valid_app "$SIM_APP"; then
+            /usr/bin/ditto -c -k --keepParent "$SIM_APP" release-dist/ios/teledrive-v${VERSION}-ios-simulator.zip
+            cp release-dist/ios/teledrive-v${VERSION}-ios-simulator.zip release-dist/teledrive-ios-simulator.zip
+            echo "✓ Created teledrive-ios-simulator.zip companion"
+          fi
+
+          echo "=== Release distribution contents ==="
+          ls -lh release-dist/ios/
+
+          if [ ! -f release-dist/ios/teledrive.ipa ]; then
+            echo "::warning::teledrive.ipa was not found in release-dist/ios/!"
+          else
+            IPA_SIZE=$(stat -f%z release-dist/ios/teledrive.ipa 2>/dev/null || stat -c%s release-dist/ios/teledrive.ipa)
+            if [ "$IPA_SIZE" -lt 1000000 ]; then
+              echo "::warning::teledrive.ipa is small ($IPA_SIZE bytes)"
+            fi
+          fi
+
+      - name: Upload iOS artifacts (.IPA)
+        uses: actions/upload-artifact@v7
+        with:
+          name: teledrive-ios-builds
+          path: |
+            release-dist/ios/*
+          if-no-files-found: error
+          retention-days: 30
+

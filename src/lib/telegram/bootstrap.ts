@@ -1,0 +1,1001 @@
+import { getClient } from "./client";
+import { logger } from "@/lib/logger";
+import { ensureStorageChannel } from "./channelManager";
+import {
+  loadIndexOutcome,
+  saveIndex,
+  deleteTelegramMessage,
+  withTimeout,
+  reconstructMissingFolders,
+  collapseDuplicateFolders,
+  dedupeByContentKey,
+  dedupeByMessageId,
+} from "../storage/metadataStore";
+import { useAuthStore } from "../../stores/authStore";
+import { useFileStore } from "../../stores/fileStore";
+import { useEncryptionStore } from "../secure/e2ee";
+import { getIndexQueue } from "../storage/indexQueue";
+import { isIndexReady } from "./indexReadiness";
+import { TeleFile } from "../types";
+import { invoke } from "@tauri-apps/api/core";
+import {
+  ensureManifest,
+  filterSupersededBackupFiles,
+  isManifestCorrupt,
+  manifestEntryToTeleFile,
+} from "../backup/manifest";
+import { normalizeFolderPath } from "../utils";
+import {
+  readPendingMarker,
+  clearPendingMarker,
+  resolvePendingIndex,
+} from "../storage/pendingIndex";
+import {
+  filterDeletedMessages,
+  getDeletedMessageIds,
+} from "../storage/tombstones";
+import i18n from "@/i18n";
+
+/**
+ * Retry Telegram document deletion for local tombstones whose background
+ * cleanup failed earlier (crash, FLOOD_WAIT, network). Tombstones keep the
+ * entries invisible; this reclaims the channel storage once Telegram accepts
+ * the delete. Runs in the background after bootstrap.
+ */
+async function flushDeletionTombstones(channelId: string): Promise<void> {
+  const ids = [...getDeletedMessageIds(channelId)];
+  if (ids.length === 0) return;
+  let deleted = 0;
+  for (const id of ids) {
+    try {
+      await deleteTelegramMessage(channelId, id);
+      deleted++;
+    } catch (err) {
+      logger.warn(`[bootstrap] tombstone delete failed for ${id}:`, err);
+      break;
+    }
+  }
+  if (deleted > 0) {
+    await invoke("log_vault_state", {
+      state: `BOOTSTRAP_TOMBSTONE_CLEANUP deleted=${deleted}/${ids.length}`,
+    }).catch(() => {});
+  }
+}
+
+/**
+ * Bootstraps TeleDrive storage channel and loads the metadata.
+ * Reports status changes to the caller.
+ *
+ * Orphan recovery: scans the last 1000 channel messages for uploaded documents
+ * that are NOT in the metadata index (e.g. because a previous index-save failed)
+ * and re-indexes them under their correct folders so they become visible.
+ *
+ * Ordering matters here. The orphan scan MUST complete before we flip
+ * `bootstrapComplete=true`. Otherwise, a user action (upload, drag, etc.)
+ * could race the recovery and write an incomplete state to Telegram,
+ * silently overwriting the previous full index with the partial set —
+ * causing data loss on the next cold start. The scan is awaited here
+ * (with a 12s cap so the splash doesn't linger forever on flaky networks).
+ */
+export async function bootstrapTeleDrive(
+  onStatusChange?: (status: string) => void,
+  phone: string = ""
+): Promise<string> {
+  // Note on gate release: `bootstrapTeleDriveInner` calls
+  // `setBootstrapComplete(true)` immediately after `setFiles(files)` —
+  // BEFORE the manifest-merge, orphan-scan, or any await that could
+  // wedge. This is intentional: drag/drop must work the moment the
+  // cached index is on screen, regardless of how slow Telegram recovery
+  // is. The orphan-scan runs in the background via Promise.race and any
+  // recovered files are merged into state.files via setFiles — they get
+  // persisted on the next user action's saveIndex.
+  return bootstrapTeleDriveInner(onStatusChange, phone);
+}
+
+/**
+ * The actual bootstrap logic. Releases the gate (sets bootstrapComplete=true)
+ * immediately after `setFiles(files)` runs — see the long comment above
+ * the `setFiles` call for why. The orphan-scan runs in the background via
+ * a fire-and-forget Promise.race so it can never wedge bootstrap completion.
+ */
+async function bootstrapTeleDriveInner(
+  onStatusChange: ((status: string) => void) | undefined,
+  phone: string
+): Promise<string> {
+  onStatusChange?.(i18n.t("messages:bootstrap.status.connecting"));
+  const client = getClient();
+
+  onStatusChange?.(i18n.t("messages:bootstrap.status.verifyingChannel"));
+  const channelId = await ensureStorageChannel(phone);
+
+  onStatusChange?.(i18n.t("messages:bootstrap.status.loadingIndex"));
+  let outcome = await loadIndexOutcome(channelId);
+
+  if (outcome.status === "incomplete" && outcome.reason === "missing_index") {
+    // The channel is reachable but contains no readable index: a brand-new
+    // channel, a channel used by an older upload-only build, or an index that
+    // was lost. Treat this as an empty-but-recoverable drive instead of a
+    // permanent failure. Otherwise every write stays gated behind an index
+    // that will never appear, because the retry loop only re-reads Telegram
+    // and never rebuilds. The orphan scan below re-indexes any TeleDrive
+    // uploads it finds and persists a fresh index.
+    useFileStore.getState().setIndexLoadState("ready", null);
+    outcome = { status: "ready", files: outcome.files, savedAt: 0 };
+    try {
+      const vaultSync = await useEncryptionStore
+        .getState()
+        .syncFromRemoteMetadata(channelId, null);
+      if (vaultSync.vaultMetadata) {
+        getIndexQueue(channelId).setVaultMetadata(vaultSync.vaultMetadata);
+      }
+    } catch (vaultErr) {
+      logger.warn("[bootstrap] Failed to initialize account vault on empty channel:", vaultErr);
+    }
+    await invoke("log_vault_state", {
+      state: `BOOTSTRAP_NO_INDEX_REBUILD files=${outcome.files.length}`,
+    }).catch(() => {});
+  }
+
+  if (outcome.status === "incomplete") {
+    // Keep the cached file list, but still honor permanent-deletion
+    // tombstones: an unclean shutdown can leave a deleted entry in the cache
+    // even though the live index is temporarily unreadable.
+    const cached = useFileStore.getState().files;
+    useFileStore.getState().setFiles(filterDeletedMessages(channelId, cached));
+    useFileStore.getState().setBootstrapComplete(true);
+    onStatusChange?.(i18n.t("messages:bootstrap.status.indexIncomplete"));
+    scheduleIndexRetry(channelId, onStatusChange);
+    return channelId;
+  }
+
+  // A pending marker means the local cache may contain an action that never
+  // reached Telegram (crash, failed logout, killed window). Resolve it before
+  // overwriting the store with the loaded index.
+  const cachedFiles = useFileStore.getState().files;
+  const marker = readPendingMarker(channelId);
+  const resolution = resolvePendingIndex(
+    marker,
+    cachedFiles,
+    outcome.files,
+    outcome.savedAt
+  );
+  if (marker && !resolution.replay) {
+    clearPendingMarker(channelId);
+  }
+  if (resolution.kind === "keep-cache") {
+    logger.log(
+      `[bootstrap] Keeping ${cachedFiles.length} cached files over index savedAt=${outcome.savedAt}`
+    );
+  } else if (resolution.kind === "merge") {
+    logger.log(
+      `[bootstrap] Additive pending merge: ${outcome.files.length} loaded + local-only entries`
+    );
+  }
+
+  let files = filterDeletedMessages(channelId, resolution.files);
+  try {
+    const { syncOfflineStatusWithDisk } = await import("../storage/offlineStorage");
+    files = await syncOfflineStatusWithDisk(files);
+  } catch (err) {
+    logger.warn("[bootstrap] Failed to sync offline status with disk:", err);
+  }
+  // Initialize the local view immediately and RELEASE THE GATE. We do NOT
+  // wait for the orphan scan or manifest-merge before allowing user
+  // actions — the previous "wait for everything" design caused a 20s+
+  // bootstrap hang any time the Tauri IPC channel or GramJS request
+  // queue wedged (FLOOD_WAIT cascades), breaking drag/drop for every
+  // user. The new model is "release on cache, recover in background":
+  //   1. `setFiles(files)` writes the index-derived files to state.files
+  //      AND localStorage. The UI is fully usable at this point.
+  //   2. `setBootstrapComplete(true)` immediately follows. Drag/drop,
+  //      rename, delete, upload — ALL work now.
+  //   3. The manifest-merge and orphan-scan still run to completion in
+  //      the background. They mutate `state.files` directly (via setFiles)
+  //      so any newly-recovered files appear in the UI as they're found.
+  //      When the user next performs an action, the queue picks up the
+  //      latest merged state and persists it to Telegram. No data loss
+  //      because in-memory state is always the source of truth for the
+  //      next save.
+  //
+  // The old comment claimed orphan scan running concurrently with user
+  // actions could cause "partial overwrite of Telegram" — but the queue
+  // serializes every save through commitOnce, and each save reads the
+  // CURRENT in-memory state at commit time. If orphan scan finds files
+  // before the next commit, those files are included. If it finds them
+  // after the next commit, they wait for the user's next action.
+  const { setFiles } = useFileStore.getState();
+  setFiles(files);
+  useFileStore.getState().setBootstrapComplete(true);
+
+  if (resolution.replay) {
+    // The marker stays until this commits; a failure is retried by the queue
+    // and, if the app dies, by the next bootstrap.
+    saveIndex(channelId, files).catch((err) => {
+      logger.warn("[bootstrap] Pending local snapshot replay failed:", err);
+    });
+  }
+
+  // If the index was lost *and* there is no local cache to fall back on,
+  // quietly scan channel history for older snapshots and offer recovery.
+  // Never restores automatically; the user reviews the list first.
+  if (files.length === 0) {
+    import("../storage/recovery").then(({ maybeOfferRecovery }) => {
+      maybeOfferRecovery(channelId, (report) => {
+        if (report.recoverable.length === 0) return;
+        import("../../stores/recoveryStore").then(({ useRecoveryStore }) => {
+          useRecoveryStore
+            .getState()
+            .offer(channelId, report.recoverable.length);
+        });
+      }).catch((err) => {
+        logger.warn("[bootstrap] Recovery scan failed:", err);
+      });
+    });
+  }
+
+
+  // ── Manifest-merge step ───────────────────────────────────────────────
+  // The local backup manifest (teledrive_backup_manifest_v1 in the vault)
+  // is the durable record of every successful device-backup upload: for
+  // each entry we know the Telegram messageId and the channel-side
+  // folderPath under `/TeleDrive Backups/<device>/...`. It survives app
+  // restarts and is independent of Telegram index health.
+  //
+  // Why merge here, before the orphan scan?
+  //   - The Telegram pinned-index chunks can fail to land under FLOOD_WAIT
+  //     (596s waits have been observed; see vault_state.log). When that
+  //     happens, `loadIndex` returns a smaller chunk set than what the
+  //     runner actually wrote, and backup files vanish from the Backups
+  //     view even though they exist on Telegram.
+  //   - The orphan scan reads last 1000 messages; older backup messages
+  //     fall outside the window. Even within range, a damaged caption can
+  //     drop the parsed folderPath back to "/" — losing the namespace.
+  //
+  // The manifest is local and reliable, so we seed `state.files` from it
+  // BEFORE recovery runs. `dedupeByMessageId` ensures any overlap with
+  // `loadIndex` results collapses to a single entry (the index version is
+  // preferred since it may carry richer metadata).
+  //
+  // CRITICAL: the in-memory merge is synchronous and fast (one disk
+  // read + a Set-based dedup). We MUST NOT await the Telegram saveIndex
+  // here — `enqueueSave` resolves only on success or hard error, and
+  // transient FLOOD_WAIT keeps the promise pending. Awaiting it would
+  // block bootstrap completion, which in turn blocks every user action
+  // (drag, drop, rename, delete — all gated on `bootstrapComplete`).
+  // The saveIndex is therefore fire-and-forget; the manifest is
+  // durable so the next cold start will re-run the merge if Telegram
+  // is still stale.
+  try {
+    // Run the in-memory merge synchronously (no `await`) so the store
+    // is updated immediately and the Backups view can render before
+    // bootstrap completes. The helper does its own setFiles internally.
+    const merged = await mergeBackupManifestSync(channelId, files, setFiles);
+    // Persist only when the merge actually changed the file set. Comparing
+    // lengths misses an equal-size remove+add.
+    if (merged.changed) {
+      fireAndForgetSaveIndex(channelId, merged.files);
+    }
+  } catch (manifestErr) {
+    logger.warn("[bootstrap] manifest merge failed (continuing):", manifestErr);
+  }
+
+  // ── Orphan recovery (SYNCHRONOUS — must finish before bootstrap completes) ──
+  // The previous "background" version was the root cause of a data-loss bug:
+  // the user could upload/move a file BEFORE recovery finished, the queue
+  // would write the partial state (new file only) to Telegram, and the next
+  // cold start would lose every file the orphan scan hadn't recovered yet.
+  // We now await the scan (12s cap on the getMessages call itself, plus a
+  // hard 14s safety net on the entire recovery block) and write recovered
+  // files BEFORE we mark bootstrap complete. User actions that arrive
+  // during the scan are rejected with a retryable toast by the
+  // useFileActions bootstrap gate.
+  //
+  // Why the safety net? The Tauri IPC `invoke` channel and GramJS's
+  // request queue can wedge on bad network state (FLOOD_WAIT cascades
+  // from the IndexQueue's pinning attempts have been observed). The
+  // 12s `withTimeout` only covers the getMessages RPC itself; a hung
+  // Tauri invoke, a wedged `useFileStore` setter, or a synchronous loop
+  // that blocks for too long would still leave `bootstrapComplete=false`
+  // and break every user action. We wrap the whole block in a race
+  // against a hard timer so bootstrap ALWAYS finishes — orphan recovery
+  // is best-effort; gate release is mandatory.
+  onStatusChange?.(i18n.t("messages:bootstrap.status.recoveryScan"));
+
+  // Wrap the ENTIRE recovery block (including its own log line) in an IIFE
+  // + Promise.race. We do NOT await a log_vault_state invoke BEFORE the
+  // IIFE — that would be a synchronous preamble that any IPC wedge would
+  // block on, defeating the safety-net below. Any pre-scan logging must
+  // happen inside the IIFE so a hung Tauri IPC can't strand bootstrap.
+  const orphanScanBlock = (async () => {
+  await invoke("log_vault_state", {
+    state: `BOOTSTRAP: Starting orphan scan for channelId=${channelId}`,
+  }).catch(() => {});
+  try {
+    let recentMessages: any[] = [];
+    try {
+      recentMessages = await withTimeout(
+        client.getMessages(channelId, { limit: 400 }),
+        12000,
+        "client.getMessages(orphan scan)"
+      );
+    } catch (fetchErr: any) {
+      logger.warn("[bootstrap] Standard orphan scan timed out, attempting fast fallback:", fetchErr);
+      try {
+        recentMessages = await withTimeout(
+          client.getMessages(channelId, { limit: 150 }),
+          5000,
+          "client.getMessages(orphan fallback)"
+        );
+      } catch {
+        recentMessages = [];
+      }
+    }
+
+    // Read current files from store
+    const currentFiles = useFileStore.getState().files;
+    const indexHighWater = useFileStore.getState().lastIndexMsgId;
+    const indexedMsgIds = new Set(
+      currentFiles
+        .map((f) => Number(f.messageId))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    );
+    const orphans: TeleFile[] = [];
+
+    for (const msg of recentMessages) {
+      if (!msg?.id) continue;
+      // Skip text-only index messages
+      if (msg.text?.includes("teledrive_index")) continue;
+
+      const msgId = Number(msg.id);
+      // Skip if already in the index
+      if (indexedMsgIds.has(msgId)) continue;
+
+      // Telegram ids increase monotonically. A file message older than the
+      // newest index chunk was already visible when the current index was
+      // written; its absence is an intentional permanent deletion, not a
+      // failed index save. Recovering it would resurrect deleted files.
+      if (indexHighWater > 0 && msgId < indexHighWater) continue;
+
+      // Only care about document media (uploaded files)
+      const media = (msg as any).media;
+      if (!media?.document) continue;
+
+      // CRITICAL: Only recover files that were actually uploaded by TeleDrive!
+      // TeleDrive always tags uploaded files with `teledrive_file:{"folder":"..."}` caption.
+      // Random files, bot messages, or channel noise without this caption must NEVER
+      // be injected into the drive as unknown files.
+      const captionText = (msg.message || msg.text || "").trim();
+      if (!captionText.startsWith("teledrive_file:")) {
+        continue;
+      }
+
+      let folderPath = "/";
+      try {
+        const jsonStr = captionText.substring("teledrive_file:".length);
+        const meta = JSON.parse(jsonStr);
+        if (meta && typeof meta.folder === "string") {
+          folderPath = normalizeFolderPath(meta.folder);
+        } else {
+          continue;
+        }
+      } catch {
+        // Corrupted or non-JSON metadata caption — do not inject unknown files
+        continue;
+      }
+
+      const doc = media.document;
+      const mimeType: string = doc.mimeType || "application/octet-stream";
+      const size: number = Number(doc.size) || 0;
+
+      // Resolve name from document attribute
+      let name = "Untitled";
+      const filenameAttr = (doc.attributes || []).find(
+        (a: any) => a.className === "DocumentAttributeFilename"
+      );
+      if (filenameAttr?.fileName) {
+        name = filenameAttr.fileName;
+      }
+
+      orphans.push({
+        id: `recovered_${msgId}`,
+        name,
+        size,
+        mime: mimeType,
+        folderPath,
+        messageId: msgId,
+        channelId,
+        uploadedAt: (msg.date || 0) * 1000,
+        starred: false,
+        trashed: false,
+        archived: false,
+      });
+    }
+
+    if (orphans.length > 0) {
+      // Read latest store state — DO NOT use the cached `files` from
+      // outer scope. The user may have done a drag/drop/rename since the
+      // orphan scan started, and we MUST preserve those optimistic changes.
+      // Using a stale snapshot here would clobber the user's actions and
+      // bounce the file back to its pre-action position (the symptom the
+      // user reported: "the file comes back to the root folder because
+      // it's still trying").
+      const latestFiles = useFileStore.getState().files;
+      const existingMsgIds = new Set(latestFiles.map((f) => Number(f.messageId)));
+      const newOrphans = filterDeletedMessages(
+        channelId,
+        orphans.filter((o) => !existingMsgIds.has(Number(o.messageId))),
+      );
+
+      if (newOrphans.length > 0) {
+        logger.log(`[bootstrap] Orphan scan: Recovering ${newOrphans.length} orphaned file(s)…`);
+        const mergedFiles = [...latestFiles, ...newOrphans];
+        const { healedFiles } = reconstructMissingFolders(mergedFiles, channelId);
+
+        // One-shot recovery: drop duplicate file/folder entries from the
+        // pre-fix bug before persisting. After this single cold start,
+        // future cold starts will load a clean index and the duplicate
+        // creation loop is broken for good.
+        //
+        // Same pipeline as `metadataStore.healAndSave` so the two recovery
+        // paths converge on the same shape. `dedupeByContentKey` itself
+        // skips folders (it only collapses by content key), but running it
+        // here keeps the orphan-scan path consistent with the cold-start
+        // path — any future helper added to the healAndSave chain is then
+        // automatically picked up here too.
+        const beforeCount = healedFiles.length;
+        const cleaned = collapseDuplicateFolders(
+          dedupeByContentKey(dedupeByMessageId(healedFiles))
+        );
+        const removedCount = beforeCount - cleaned.length;
+        if (removedCount > 0) {
+          await invoke("log_vault_state", {
+            state: `BOOTSTRAP_DEDUP_REMOVED count=${removedCount} before=${beforeCount} after=${cleaned.length}`,
+          }).catch(() => {});
+          logger.log(`[bootstrap] One-shot dedup removed ${removedCount} duplicate entries`);
+        }
+
+        // Read latest state AGAIN right before setFiles. Between the
+        // dedup chain above and this point, the user may have performed
+        // another action (drag/drop/rename). If we wrote `cleaned`
+        // directly, we'd silently clobber that newer state. Instead,
+        // merge: take the post-dedup recovered entries and ADD any new
+        // entries that weren't in our recovered set. The user's most
+        // recent state always wins.
+        const finalLatest = useFileStore.getState().files;
+        const cleanedIds = new Set(cleaned.map((f) => f.id));
+        const cleanedMsgIds = new Set(
+          cleaned.map((f) => Number(f.messageId)).filter((id) => id > 0)
+        );
+        const userOnlyEntries = finalLatest.filter((f) => {
+          // Keep anything that was in the user's state but NOT in cleaned
+          // (i.e. user did an action after we built cleaned).
+          const inCleanedById = cleanedIds.has(f.id);
+          const inCleanedByMsgId =
+            f.messageId && Number(f.messageId) > 0 && cleanedMsgIds.has(Number(f.messageId));
+          // The same file can be present with different ids if the user
+          // moved it. Either match counts as "already in cleaned".
+          if (inCleanedById || inCleanedByMsgId) return false;
+          // Skip orphans we just recovered — they're already in cleaned.
+          // (This filter shouldn't be necessary given the above checks,
+          // but is defensive in case a recovered entry has a synthetic id
+          // that collides with a user entry.)
+          return true;
+        });
+        // Reconcile folderPaths: if a user-moved file conflicts with a
+        // recovered folder, prefer the user's path.
+        const finalState = filterDeletedMessages(
+          channelId,
+          mergeWithUserPreference(cleaned, userOnlyEntries),
+        );
+        useFileStore.getState().setFiles(finalState);
+
+        // Persist the recovered entries to Telegram. We use the same
+        // fire-and-forget pattern as the manifest-merge: enqueueSave
+        // stays pending on transient FLOOD_WAIT, so awaiting it here
+        // would block bootstrap completion and break drag/drop/rename/
+        // delete. The in-memory store is already correct; the next user
+        // action will trigger another enqueueSave with the same merged
+        // state, so no data is lost.
+        await invoke("log_vault_state", {
+          state: `BOOTSTRAP_ORPHAN_RECOVER count=${newOrphans.length} total=${cleaned.length}`,
+        }).catch(() => {});
+        fireAndForgetSaveIndex(channelId, cleaned);
+      }
+    }
+
+    // Reconciliation runs AFTER the orphan scan: drop superseded message ids
+    // and collapse same-path duplicates. Running it before the scan lets the
+    // scan re-add an old id that the manifest already replaced.
+    try {
+      const manifest = await ensureManifest(channelId, async (ids) => {
+        const messages = await client.getMessages(channelId, { ids });
+        const live = new Set<number>();
+        for (const message of messages ?? []) {
+          const id = Number((message as { id?: unknown })?.id);
+          if (Number.isFinite(id) && id > 0) live.add(id);
+        }
+        return live;
+      });
+      const current = useFileStore.getState().files;
+      const reconciled = filterSupersededBackupFiles(manifest, current);
+      if (reconciled.changed) {
+        useFileStore.getState().setFiles(reconciled.files);
+        fireAndForgetSaveIndex(channelId, reconciled.files);
+      }
+    } catch (reconcileErr) {
+      logger.warn("[bootstrap] backup reconciliation failed:", reconcileErr);
+    }
+
+    await invoke("log_vault_state", {
+      state: `BOOTSTRAP_ORPHAN_SCAN_DONE files=${useFileStore.getState().files.length}`,
+    }).catch(() => {});
+
+    void flushDeletionTombstones(channelId);
+
+    // Record the highest Telegram message id observed during the scan so the
+    // multi-device sync poller has a cursor to start from on its first tick.
+    // The scan pulled up to 1000 recent messages — the max id among them is
+    // a safe starting point for the next `client.getMessages({ minId })`.
+    // We compute this only after the scan completes (not after the initial
+    // loadIndex), because the orphan scan pulls the freshest slice and any
+    // newer messages sent during bootstrap would be missed otherwise.
+    try {
+      const observedIds = (recentMessages || [])
+        .map((m: any) => Number(m?.id))
+        .filter((id: number) => Number.isFinite(id) && id > 0);
+      if (observedIds.length > 0) {
+        const maxId = observedIds.reduce((a: number, b: number) => Math.max(a, b), 0);
+        useFileStore.getState().setLastIndexMsgId(maxId);
+        await invoke("log_vault_state", {
+          state: `BOOTSTRAP_LAST_INDEX_MSG_ID set=${maxId}`,
+        }).catch(() => {});
+      }
+    } catch (cursorErr) {
+      // Non-fatal — sync will just start from 0 (cold reload equivalent).
+      logger.warn("[bootstrap] Failed to record lastIndexMsgId:", cursorErr);
+    }
+  } catch (scanErr: any) {
+    await invoke("log_vault_state", {
+      state: `BOOTSTRAP_ORPHAN_SCAN_ERR: ${scanErr?.message || JSON.stringify(scanErr)}`,
+    }).catch(() => {});
+    logger.warn("[bootstrap] Orphan scan failed (continuing):", scanErr);
+    // Don't block the user indefinitely on a flaky network — proceed to
+    // bootstrap-complete so they can at least see whatever loadIndex found.
+  }
+  })();
+
+  // Fire the orphan-recovery block in the background — we no longer await
+  // it because the gate was already released above. Awaiting would block
+  // bootstrap's return value and keep App.tsx's `setIsRestoring(false)`
+  // pending. The IIFE + 14s race still bounds the recovery so a hung
+  // GramJS request doesn't leak forever; any recovered files are merged
+  // into state.files via setFiles() inside the IIFE and will be picked
+  // up by the next user action's saveIndex.
+  void Promise.race([
+    orphanScanBlock,
+    new Promise<void>((resolve) => {
+      setTimeout(() => {
+        void invoke("log_vault_state", {
+          state: "BOOTSTRAP_ORPHAN_SCAN_HARD_TIMEOUT: 14s safety net triggered",
+        }).catch(() => {});
+        logger.warn(
+          "[bootstrap] Orphan-scan block exceeded 14s hard timeout — releasing bootstrap gate",
+        );
+        resolve();
+      }, 14000);
+    }),
+  ]).then(() => {
+    const encState = useEncryptionStore.getState();
+    if (
+      isIndexReady() &&
+      encState.activeChannelId === channelId &&
+      encState.needsRemotePublish
+    ) {
+      encState.markRemotePublished(channelId);
+      fireAndForgetSaveIndex(channelId, useFileStore.getState().files);
+    }
+  });
+
+  // Gate was released right after `setFiles(files)` near the top of this
+  // function. We do NOT re-set it here — doing so would clobber the early
+  // release and reintroduce the bootstrap hang the user just hit.
+  onStatusChange?.(i18n.t("messages:bootstrap.status.initializingView"));
+
+  return channelId;
+}
+
+/**
+ * Merge backup-manifest entries into the in-memory file store.
+ *
+ * The manifest is a local vault value (`teledrive_backup_manifest_v1`)
+ * recording every successful device-backup upload with its Telegram
+ * `messageId` and channel-side `folderPath`. It is durable across cold
+ * starts and independent of whether the Telegram pinned-index chunks
+ * landed cleanly. When the index is stale (FLOOD_WAIT blocked pinning,
+ * edit-temp-restricted windows, orphan scan missed the window), the
+ * manifest is the most reliable signal that a backup file exists.
+ *
+ * Pipeline (mirrors the orphan-scan merge at lines 192-230):
+ *   1. Load the manifest. Skip if corrupt (the runner already gates on
+ *      `isManifestCorrupt` and refuses to upload; we're consistent with
+ *      that).
+ *   2. Convert each entry to a TeleFile via `manifestEntryToTeleFile`.
+ *   3. `dedupeByMessageId` against the existing index entries — anything
+ *      with the same messageId is dropped (the index version wins
+ *      because it may carry richer metadata).
+ *   4. `reconstructMissingFolders` so the Backups view renders the
+ *      folder tree without waiting for the orphan scan.
+ *   5. `setFiles` to update the store + localStorage cache.
+ *
+ * This function is SYNCHRONOUS and never awaits anything. The
+ * `loadManifest` call is the only async step, but it returns the
+ * manifest from a vault read — fast in practice. We don't await the
+ * Telegram saveIndex here: `enqueueSave` resolves only on success or
+ * hard error, and transient FLOOD_WAIT keeps the promise pending. If
+ * we awaited it during bootstrap, the bootstrap gate (which is
+ * consulted by every user action) would block until Telegram accepts
+ * the write, breaking drag/drop/rename/delete.
+ *
+ * Persistence to Telegram is handled by the caller via
+ * `fireAndForgetSaveIndex` AFTER the in-memory merge has applied.
+ * That decouples the bootstrap completion from the index health.
+ */
+async function mergeBackupManifestSync(
+  channelId: string,
+  existingFiles: TeleFile[],
+  setFiles: (files: TeleFile[]) => void,
+): Promise<{ files: TeleFile[]; changed: boolean }> {
+  // 1. Load the manifest. Skip cleanly if it's corrupt — the runner
+  // gates on the same sentinel and we want consistent behavior.
+  let manifest;
+  try {
+    manifest = await ensureManifest(channelId, async (ids) => {
+      const client = getClient();
+      const messages = await client.getMessages(channelId, { ids });
+      const live = new Set<number>();
+      for (const message of messages ?? []) {
+        const id = Number((message as { id?: unknown })?.id);
+        if (Number.isFinite(id) && id > 0) live.add(id);
+      }
+      return live;
+    });
+  } catch (err) {
+    logger.warn("[bootstrap] manifest load threw; skipping merge:", err);
+    return { files: existingFiles, changed: false };
+  }
+  if (isManifestCorrupt(channelId)) {
+    logger.warn("[bootstrap] manifest corrupt; skipping merge (runner will refuse to upload too)");
+    return { files: existingFiles, changed: false };
+  }
+  const manifestEntries = Object.entries(manifest.entries ?? {});
+  if (manifestEntries.length === 0) {
+    return { files: existingFiles, changed: false };
+  }
+
+  // 2. Convert entries to TeleFiles. Drop ones that fail the conversion
+  // (defensive — older manifest versions might lack messageId/folderPath).
+  const fromManifest: TeleFile[] = [];
+  let conversionFailures = 0;
+  for (const [absPath, entry] of manifestEntries) {
+    const tf = manifestEntryToTeleFile(absPath, entry, channelId);
+    if (tf) fromManifest.push(tf);
+    else conversionFailures++;
+  }
+  if (conversionFailures > 0) {
+    logger.warn(
+      `[bootstrap] manifest merge: ${conversionFailures}/${manifestEntries.length} entries failed conversion`,
+    );
+  }
+  const visibleFromManifest = filterDeletedMessages(channelId, fromManifest);
+  if (visibleFromManifest.length === 0) {
+    return { files: existingFiles, changed: false };
+  }
+
+  // A completed index is authoritative for everything written before its
+  // newest chunk. Manifest entries older than that high-water mark are either
+  // already in the index or were deleted; re-adding them resurrects deleted
+  // backups. When discovery is incomplete, or the index is empty, the manifest
+  // is the only durable source and all entries are considered.
+  const store = useFileStore.getState();
+  const indexHighWater = store.lastIndexMsgId;
+  const eligibleFromManifest =
+    store.indexLoadState === "ready" && indexHighWater > 0
+      ? visibleFromManifest.filter(
+          (f) => Number(f.messageId) > indexHighWater,
+        )
+      : visibleFromManifest;
+
+  // 3. dedupeByMessageId against existing files (the index version wins
+  // on conflicts because it may carry richer metadata, e.g. an updated
+  // folderPath if a file was moved).
+  const existingMsgIds = new Set(
+    existingFiles.map((f) => Number(f.messageId)).filter((id) => Number.isFinite(id) && id > 0),
+  );
+  const newFromManifest = eligibleFromManifest.filter(
+    (f) => !existingMsgIds.has(Number(f.messageId)),
+  );
+  const added = newFromManifest.length;
+  if (added === 0) {
+    return { files: existingFiles, changed: false };
+  }
+
+  // 4. Reconstruct missing parent folders BEFORE setFiles so the Backups
+  // view renders a complete tree on the very next render (no waiting on
+  // the orphan scan to populate intermediate folders).
+  const merged = [...existingFiles, ...newFromManifest];
+  const { healedFiles } = reconstructMissingFolders(merged, channelId);
+
+  // 5. Apply to the store. setFiles writes localStorage too, so the
+  // change survives a refresh even if the Telegram saveIndex below fails.
+  setFiles(healedFiles);
+  logger.log(
+    `[bootstrap] manifest merge added ${added} backup entries (total ${healedFiles.length})`,
+  );
+  await invoke("log_vault_state", {
+    state: `BOOTSTRAP_MANIFEST_MERGE added=${added} total=${healedFiles.length}`,
+  }).catch(() => {});
+
+  return { files: healedFiles, changed: true };
+}
+
+/**
+ * Fire-and-forget wrapper around saveIndex used by the manifest-merge
+ * path. The saveIndex call routes through enqueueSave, which serializes
+ * with user actions and retries on transient FLOOD_WAIT. We deliberately
+ * don't await it during bootstrap — bootstrap completion is what unblocks
+ * user actions, so blocking bootstrap on the queue would be a deadlock.
+ *
+ * If the save fails entirely (hard Telegram error), the merge still
+ * applied in-memory, so the Backups view works for this session. On the
+ * next cold start, the manifest-merge path runs again and tries the
+ * saveIndex once more. The manifest is durable so no data is lost.
+ */
+function fireAndForgetSaveIndex(channelId: string, state: TeleFile[]): void {
+  saveIndex(channelId, state).catch((err) => {
+    logger.warn("[bootstrap] manifest-merge saveIndex failed (non-fatal):", err);
+  });
+}
+
+/**
+ * Reconcile an orphan-recovered file set (`recovered`) with user-only
+ * entries that arrived after recovery started (`userOnly`). When the same
+ * underlying Telegram messageId appears in both, the USER version wins
+ * (folderPath, name, etc.) because it reflects the user's most recent
+ * intent. The recovered version provides its metadata only for entries
+ * the user has never touched.
+ *
+ * This function also handles the "user moved a file that the orphan scan
+ * just recovered" case: the recovered entry has the file's pre-existing
+ * (Telegram-state) folderPath, while the user's entry has the moved
+ * folderPath. We want the moved version.
+ */
+function mergeWithUserPreference(
+  recovered: TeleFile[],
+  userOnly: TeleFile[],
+): TeleFile[] {
+  if (userOnly.length === 0) return recovered;
+  if (recovered.length === 0) return userOnly;
+
+  // Build a quick lookup of user entries by messageId. Files without a
+  // real Telegram messageId (e.g. fresh uploads not yet pinned, or
+  // purely-local placeholders) are kept as-is from `userOnly` since
+  // they can't correspond to anything recovered from Telegram.
+  const userByMsgId = new Map<number, TeleFile>();
+  for (const f of userOnly) {
+    const id = Number(f.messageId);
+    if (Number.isFinite(id) && id > 0) {
+      userByMsgId.set(id, f);
+    }
+  }
+
+  const merged: TeleFile[] = [];
+  let userOverrides = 0;
+  for (const r of recovered) {
+    const rid = Number(r.messageId);
+    const userVersion = userByMsgId.get(rid);
+    if (userVersion) {
+      // User touched this messageId AFTER the orphan scan started — keep
+      // the user's folderPath/name/etc., but if the recovered version has
+      // a richer messageId/channelId (it always does, since orphans carry
+      // a real Telegram id) and the user's version is missing one, fill it
+      // in. This keeps drag/drop behaviour intuitive while still letting
+      // the orphan scan repair broken messageIds.
+      const patched: TeleFile = {
+        ...userVersion,
+        messageId: userVersion.messageId || r.messageId,
+        channelId: userVersion.channelId || r.channelId,
+      };
+      merged.push(patched);
+      userOverrides++;
+    } else {
+      merged.push(r);
+    }
+  }
+
+  // Add user-only entries that have no Telegram messageId match (purely
+  // local — pending uploads, optimistic placeholders, etc.). These never
+  // appear in `recovered` because Telegram doesn't know about them yet.
+  for (const f of userOnly) {
+    const id = Number(f.messageId);
+    if (!Number.isFinite(id) || id <= 0) {
+      merged.push(f);
+    }
+  }
+
+  if (userOverrides > 0) {
+    logger.log(
+      `[bootstrap] orphan-recovery merge: ${userOverrides} user action(s) preserved (would have been clobbered)`,
+    );
+  }
+  return merged;
+}
+
+
+// ---------------------------------------------------------------------------
+// Incomplete-index retry loop
+// ---------------------------------------------------------------------------
+//
+// Discovery can fail transiently (network loss, Telegram inconsistency right
+// after a save) or permanently (a manifest names a deleted chunk). While the
+// store is incomplete every write is blocked, so we keep retrying with bounded
+// backoff and also wake up immediately when the OS reports the network is back
+// or the window regains focus. No retry ever writes to Telegram: it only calls
+// `loadIndexOutcome`, which is read-only until a complete epoch is found.
+
+const INDEX_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000];
+
+let indexRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let indexRetryAttempt = 0;
+let indexRetryChannelId: string | null = null;
+let indexRetryRunning = false;
+let indexRetryListenersAttached = false;
+let indexRetryStatus: ((status: string) => void) | undefined;
+
+const retryOnConnectivity = () => {
+  if (indexRetryChannelId) retryIndexNow();
+};
+
+function attachIndexRetryListeners(): void {
+  if (indexRetryListenersAttached || typeof window === "undefined") return;
+  window.addEventListener("online", retryOnConnectivity);
+  window.addEventListener("focus", retryOnConnectivity);
+  indexRetryListenersAttached = true;
+}
+
+function detachIndexRetryListeners(): void {
+  if (!indexRetryListenersAttached || typeof window === "undefined") return;
+  window.removeEventListener("online", retryOnConnectivity);
+  window.removeEventListener("focus", retryOnConnectivity);
+  indexRetryListenersAttached = false;
+}
+
+export function stopIndexRetries(): void {
+  if (indexRetryTimer) {
+    clearTimeout(indexRetryTimer);
+    indexRetryTimer = null;
+  }
+  detachIndexRetryListeners();
+  indexRetryChannelId = null;
+  indexRetryAttempt = 0;
+  indexRetryStatus = undefined;
+}
+
+function queueIndexRetry(): void {
+  if (!indexRetryChannelId) return;
+  if (indexRetryTimer) clearTimeout(indexRetryTimer);
+  const delay =
+    INDEX_RETRY_DELAYS_MS[Math.min(indexRetryAttempt, INDEX_RETRY_DELAYS_MS.length - 1)];
+  indexRetryTimer = setTimeout(() => {
+    indexRetryTimer = null;
+    void runIndexRetry();
+  }, delay);
+}
+
+async function runIndexRetry(): Promise<void> {
+  const channelId = indexRetryChannelId;
+  if (!channelId || indexRetryRunning) return;
+  if (!useAuthStore.getState().isAuthenticated) {
+    stopIndexRetries();
+    return;
+  }
+
+  indexRetryRunning = true;
+  try {
+    let outcome = await loadIndexOutcome(channelId);
+    if (indexRetryChannelId !== channelId) return;
+
+    if (outcome.status === "incomplete" && outcome.reason === "missing_index") {
+      // A transient failure recovered, but the channel has no index at all.
+      // Unblock writes instead of retrying forever; the next bootstrap pass
+      // rebuilds the index from channel history (orphan recovery).
+      useFileStore.getState().setIndexLoadState("ready", null);
+      outcome = {
+        status: "ready",
+        files: useFileStore.getState().files,
+        savedAt: 0,
+      };
+      await invoke("log_vault_state", {
+        state: `INDEX_RETRY_NO_INDEX files=${outcome.files.length}`,
+      }).catch(() => {});
+    }
+
+    if (outcome.status === "ready") {
+      const status = indexRetryStatus;
+      stopIndexRetries();
+      const currentFiles = useFileStore.getState().files;
+      const outcomeIds = new Set(outcome.files.map((f) => f.id));
+      const localOnlyFolders = currentFiles.filter((f) =>
+        (f.mime === "inode/directory" || f.mime === "application/x-directory") && !outcomeIds.has(f.id)
+      );
+      const mergedWithLocal = [...outcome.files, ...localOnlyFolders];
+      const setFiles = useFileStore.getState().setFiles;
+      setFiles(mergedWithLocal);
+      try {
+        const merged = await mergeBackupManifestSync(
+          channelId,
+          mergedWithLocal,
+          setFiles,
+        );
+        if (merged.changed || localOnlyFolders.length > 0) {
+          fireAndForgetSaveIndex(channelId, merged.files);
+        }
+      } catch (manifestErr) {
+        logger.warn("[bootstrap] manifest merge after retry failed:", manifestErr);
+        if (localOnlyFolders.length > 0) {
+          fireAndForgetSaveIndex(channelId, mergedWithLocal);
+        }
+      }
+      await invoke("log_vault_state", {
+        state: `INDEX_RETRY_READY files=${useFileStore.getState().files.length}`,
+      }).catch(() => {});
+      status?.(i18n.t("messages:bootstrap.status.initializingView"));
+      // Resume uploads that were queued while writes were blocked.
+      void import("../upload/uploadManager")
+        .then((mod) => mod.processQueue())
+        .catch((err) => logger.warn("[bootstrap] processQueue after retry failed:", err));
+      return;
+    }
+
+    indexRetryAttempt++;
+    queueIndexRetry();
+  } catch (err) {
+    logger.warn("[bootstrap] index retry failed:", err);
+    indexRetryAttempt++;
+    queueIndexRetry();
+  } finally {
+    indexRetryRunning = false;
+  }
+}
+
+/** Retry immediately (banner button, online/focus events). */
+export function retryIndexNow(): void {
+  if (!indexRetryChannelId) return;
+  if (indexRetryTimer) {
+    clearTimeout(indexRetryTimer);
+    indexRetryTimer = null;
+  }
+  indexRetryAttempt = 0;
+  void runIndexRetry();
+}
+
+/**
+ * Start (or kick) the retry loop for a channel. Used when a non-bootstrap
+ * caller (Settings → recalculate) discovers an incomplete index.
+ */
+export function retryIndexDiscovery(channelId: string): void {
+  if (!indexRetryChannelId) {
+    scheduleIndexRetry(channelId);
+  }
+  retryIndexNow();
+}
+
+function scheduleIndexRetry(
+  channelId: string,
+  onStatusChange?: (status: string) => void
+): void {
+  stopIndexRetries();
+  indexRetryChannelId = channelId;
+  indexRetryStatus = onStatusChange;
+  attachIndexRetryListeners();
+  queueIndexRetry();
+}

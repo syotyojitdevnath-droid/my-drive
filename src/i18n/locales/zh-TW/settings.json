@@ -1,0 +1,413 @@
+{
+  "page": {
+    "title": "設定",
+    "backToDrive": "返回雲端硬碟"
+  },
+  "nav": {
+    "account": "Telegram賬戶",
+    "backup": "裝置備份",
+    "appearance": "外貌",
+    "language": "語言",
+    "storage": "貯存",
+    "about": "關於",
+    "encryption": "端對端加密",
+    "security": "Security & App Lock",
+    "general": "一般"
+  },
+  "language": {
+    "title": "語言",
+    "description": "選擇在 TeleDrive 介面中使用的語言。",
+    "activeLanguage": "目前語言",
+    "cardDescription": "選擇您偏好的語言。變更將立即在所有視圖中生效。",
+    "callout": "<strong>即時同步：</strong>TeleDrive 會在本地儲存您的語言選擇，並自動套用於所有視窗與工作階段。"
+  },
+  "logout": {
+    "button": "退出",
+    "title": "退出",
+    "description": "您將退出 Telegram 帳戶。您的檔案將安全地儲存在您的儲存通道中。",
+    "cancel": "取消",
+    "confirm": "退出",
+    "loggingOut": "正在退出…"
+  },
+  "account": {
+    "title": "Telegram賬戶",
+    "description": "管理您連線的 Telegram 憑證和雲端儲存通道。",
+    "notConnected": {
+      "title": "未連線",
+      "description": "連線您的 Telegram 帳戶，開始在您的私人儲存通道中儲存無限的檔案。",
+      "connect": "連線Telegram帳戶"
+    },
+    "activeSession": "活動會話",
+    "connectedVia": "通過 Telegram MTProto 客戶端連線",
+    "disconnect": "斷開帳戶",
+    "channel": {
+      "title": "活動儲存通道",
+      "description": "您的檔案、資料夾和後設資料都安全地儲存在這個私人通道中。",
+      "name": "頻道名稱",
+      "id": "Telegram頻道 ID",
+      "loading": "載入中...",
+      "copyId": "複製頻道 ID"
+    },
+    "syncing": "正在同步...",
+    "syncNow": "立即同步",
+    "switchChannel": "切換頻道",
+    "architecture": "<strong>去中心化雲端儲存</strong>：您的檔案將作為訊息文件直接上傳到您的私人 Telegram 頻道。 TeleDrive 維護固定在此通道中的索引清單，以便您的資料夾和檔案自動保持同步。",
+    "switchDialog": {
+      "title": "切換儲存通道",
+      "description": "選擇用於 TeleDrive 檔案的不同私人 Telegram 頻道。",
+      "warning": "<strong>警告：</strong>切換儲存通道會重置本地快取。 TeleDrive 將在所選渠道中查詢現有清單或建立新清單。",
+      "cancel": "取消",
+      "confirm": "確認"
+    },
+    "toasts": {
+      "channelIdCopied": "通道 ID 已複製到剪貼簿",
+      "syncSuccess": "檔案同步成功！",
+      "alreadyUpToDate": "您的驅動器已經是最新的。",
+      "syncFailed": "同步失敗",
+      "disconnected": "已成功斷開 Telegram 帳戶。",
+      "disconnectFailed": "無法斷開帳戶。",
+      "channelReset": "儲存通道重置。重新啟動應用程式以重新對映它。",
+      "channelResetFailed": "重置儲存通道失敗。"
+    }
+  },
+  "backup": {
+    "title": "裝置備份",
+    "description": "選擇此計算機上的資料夾以自動映象到您的私人 Telegram 儲存通道。",
+    "folders": {
+      "title": "原始檔夾",
+      "saving": "儲存…",
+      "description": "資料夾映象在您的裝置備份根目錄下並保持同步。自動儲存。",
+      "empty": "尚未新增資料夾。點選下面的“新增資料夾”。",
+      "add": "新增資料夾",
+      "pickerTitle": "選擇要備份的資料夾"
+    },
+    "excludes": {
+      "title": "排除模式",
+      "description": "相對於原始檔夾的全域性模式。支援 <code>*</code>、<code>**</code> 和 <code>?</code>。示例：<code>node_modules</code>、<code>*.tmp</code>。",
+      "empty": "沒有排除。原始檔夾中的所有內容都將被備份。",
+      "placeholder": "例如*.tmp 或 node_modules",
+      "add": "新增"
+    },
+    "remove": "刪除{{item}}",
+    "cadence": {
+      "title": "備份節奏",
+      "active": "積極的",
+      "description": "TeleDrive 應多久重新掃描一次原始檔夾。僅重新上傳更改的檔案。",
+      "off": "離開",
+      "every6h": "每 6 小時",
+      "every12h": "每12小時一次",
+      "every24h": "每24小時一次",
+      "onChange": "檔案變更時"
+    },
+    "lastBackup": "最後備份：",
+    "lastBackupAgo": "{{時間}}前",
+    "never": "絕不",
+    "lastResult": {
+      "uploaded_one": "已上傳 {{count}} 個，",
+      "uploaded_other": "已上傳 {{count}} 個，",
+      "unchanged_one": "{{count}} 不變，",
+      "unchanged_other": "{{count}} 不變，",
+      "failed_one": "{{count}} 失敗",
+      "failed_other": "{{count}} 失敗",
+      "deleted_one": "已從磁碟刪除 {{count}} 個",
+      "deleted_other": "已從磁碟刪除 {{count}} 個"
+    },
+    "progressHint": "檢視右下角的進度面板。",
+    "cancel": "取消",
+    "running": "正在備份...",
+    "runNow": "立即執行備份",
+    "howItWorks": "<strong>備份的工作原理</strong>：TeleDrive 會遍歷您選擇的資料夾，與本地清單進行比較，並僅上傳新的或更改的檔案。",
+    "viewBackups": "檢視備份",
+    "toasts": {
+      "maxFolders_one": "最多 {{count}} 個原始檔夾。",
+      "maxFolders_other": "最多 {{count}} 個原始檔夾。",
+      "maxExcludes_one": "最多排除 {{count}} 個模式。",
+      "maxExcludes_other": "最多排除 {{count}} 個模式。",
+      "pickerFailed": "無法開啟資料夾選擇器",
+      "noFolders": "首先至少選擇一個原始檔夾"
+    },
+    "lastAttempt": "上次嘗試：",
+    "lastAttemptAgo": "{{time}} 前",
+    "runStatus": {
+      "success": "成功",
+      "partial": "完成（有警告）",
+      "failed": "失敗",
+      "cancelled": "已取消 — 將在下次執行時恢復"
+    },
+    "missingRoots_one": "{{count}} 個來源資料夾無法使用。其他資料夾已完成備份。",
+    "missingRoots_other": "{{count}} 個來源資料夾無法使用。其他資料夾已完成備份。",
+    "editFolders": "編輯資料夾",
+    "autoDelete": {
+      "title": "備份後從磁碟刪除",
+      "description": "每次備份後，備份資料夾中已安全存放在 Telegram 的檔案會從這台電腦刪除。只影響上方列出的資料夾中的檔案；上傳後又被編輯的檔案會保留，直到再次備份。",
+      "activeWarning": "已開啟：已備份的檔案正從這台電腦刪除。需要時可透過 TeleDrive 還原。",
+      "confirmTitle": "要從這台電腦刪除已備份的檔案嗎？",
+      "confirmBody": "從下次備份開始，這些資料夾中已在 Telegram 的每個檔案都會從磁碟刪除。TeleDrive 無法復原：唯一剩下的副本將是 Telegram 中的那份。",
+      "confirm": "開啟並刪除",
+      "cancel": "取消"
+    },
+    "waitingTelegram": "等待 Telegram 至 {{time}}（剩餘 {{remaining}}）。備份將自動繼續。",
+    "manifestCorrupt": "此裝置的備份記錄已損毀，備份已暫停。",
+    "rebuildManifest": "從 Telegram 重建",
+    "rebuildManifestDone": "備份記錄已重建。已在 Telegram 中的檔案將重新連結，不會再次上傳。",
+    "rebuildManifestFailed": "無法重建備份記錄。",
+    "watch": {
+      "error": "資料夾監控無法運作。變更將在定期掃描時被發現。",
+      "degraded_one": "{{count}} 個資料夾未受監控（不存在或無法存取）。每 5 分鐘重試一次。",
+      "degraded_other": "{{count}} 個資料夾未受監控（不存在或無法存取）。每 5 分鐘重試一次。",
+      "nextRetry": "部分檔案失敗。下次自動重試時間：{{time}}。"
+    }
+  },
+  "appearance": {
+    "title": "外貌",
+    "description": "自定義 TeleDrive 的佈局外觀和顏色主題。",
+    "themeMode": {
+      "title": "主題模式",
+      "description": "選擇 TeleDrive 是否使用淺色、深色或系統自適應外觀。"
+    },
+    "themes": {
+      "light": {
+        "label": "光",
+        "description": "乾淨、高對比度的淺色主題，帶有 Google 雲端硬碟畫布"
+      },
+      "dark": {
+        "label": "黑暗的",
+        "description": "時尚的深色主題針對低光環境進行了最佳化"
+      },
+      "system": {
+        "label": "系統",
+        "description": "自動與您的作業系統外觀同步"
+      }
+    },
+    "callout": "<strong>主題同步</strong>：TeleDrive 在淺色 (`#F8FAFD`) 和深色 (`#131314`) 表面上使用 Google Drive 精選的 HSL 顏色標記，確保高對比度並減少眼睛疲勞。"
+  },
+  "storage": {
+    "title": "貯存",
+    "description": "監控您的 Telegram 雲端儲存空間、活動檔案和垃圾保留情況。",
+    "totalUsed": "使用的總儲存空間",
+    "calculating": "正在計算...",
+    "ofUnlimited": "無限的",
+    "unlimitedBadge": "無限雲端儲存",
+    "meterLabel": "Telegram 頻道儲存（無限）",
+    "stats": {
+      "files": "已儲存的檔案",
+      "folders": "已建立資料夾",
+      "trash": "垃圾桶中的專案"
+    },
+    "recalculating": "正在重新計算...",
+    "recalculate": "重新計算儲存空間",
+    "info": {
+      "noLimit": "Telegram 對私人頻道中儲存的累計資料量沒有任何限制。",
+      "fileLimits": "單個檔案限制：標準賬戶每個檔案最多<strong>2 GB</strong>，Telegram Premium 訂閱者最多<strong>4 GB</strong>。"
+    },
+    "toasts": {
+      "channelNotInitialised": "儲存通道尚未初始化。",
+      "refreshed": "從 Telegram 重新整理儲存。",
+      "refreshFailed": "重新整理儲存資料失敗。",
+      "indexIncomplete": "無法驗證完整索引。仍會顯示快取檔案；變更操作保持暫停。"
+    },
+    "indexSave": {
+      "saving": "正在將更新的檔案清單儲存至 Telegram…",
+      "retrying": "Telegram 正在限制儲存速率。將在 {{seconds}} 秒後自動重試。您的檔案安全無虞。"
+    },
+    "recovery": {
+      "button": "還原缺失檔案",
+      "title": "還原檔案",
+      "description": "透過檢查頻道中的歷史索引快照與已上傳的檔案，找回雲端硬碟中缺失的檔案。您目前的檔案將完整保留。",
+      "warning": "還原的檔案會新增至您目前的雲端硬碟 — 不會刪除任何內容。歷史快照可能包含您日後已刪除或重新命名的檔案。",
+      "scanning": "正在掃描頻道歷史記錄…",
+      "empty": "未找到可還原的檔案。",
+      "epochUnknown": "未知日期",
+      "channelFiles": "在頻道歷史記錄中發現的檔案",
+      "selectAll": "全選",
+      "selectNone": "取消全選",
+      "selectedCount": "已選擇 {{selected}} / {{total}}",
+      "filesCount_one": "{{count}} 個檔案",
+      "filesCount_other": "{{count}} 個檔案",
+      "restore": "新增已選項目 ({{count}})",
+      "restoring": "正在新增檔案…",
+      "restored_one": "已新增 {{count}} 個檔案至您的雲端硬碟",
+      "restored_other": "已新增 {{count}} 個檔案至您的雲端硬碟",
+      "restoredPartial_one": "已新增 {{count}} 個檔案；略過了 {{skipped}} 則遺失的訊息",
+      "restoredPartial_other": "已新增 {{count}} 個檔案；略過了 {{skipped}} 則遺失的訊息",
+      "nothingNew": "沒有需要新增的檔案 — 這些檔案已在您的雲端硬碟中。",
+      "failed": "無法還原檔案",
+      "cancel": "取消",
+      "scanningHint": "正在儲存頻道中尋找未建立索引的檔案與較早的目錄快照…",
+      "rateLimited": "已達 Telegram 速率限制 — {{seconds}}秒後重試…"
+    }
+  },
+  "about": {
+    "title": "關於 TeleDrive",
+    "description": "瞭解有關應用程式、更新和開源專案的更多資訊。",
+    "logoAlt": "電信標誌",
+    "tagline": "由 Telegram 支援的虛擬雲端儲存客戶端",
+    "summary": "TeleDrive 是一款由 Telegram 提供支援的開源跨平臺雲驅動客戶端。它將您的檔案儲存對映到私有 Telegram 頻道，並將您的檔案組織到虛擬分層驅動器中，並具有快速搜尋、預覽和即時同步功能。",
+    "starOnGithub": "在 GitHub 上給個 Star",
+    "githubRepository": "GitHub 儲存庫",
+    "reportIssue": "報告問題",
+    "watchDemo": "觀看示範",
+    "joinBeta": "參與 Beta 測試",
+    "website": "官方網站",
+    "architecture": "基於通道的雲端儲存架構",
+    "checkingUpdates": "正在檢查更新...",
+    "checkUpdates": "檢查更新",
+    "disclaimer": {
+      "title": "免責宣告",
+      "body": "TeleDrive 是一款獨立的開源客戶端應用程式，不隸屬於 Telegram FZ-LLC 或其任何附屬公司，也不受其授權、維護、贊助或認可。"
+    },
+    "toasts": {
+      "openLinkFailed": "無法開啟連結。",
+      "upToDate": "你是最新的！",
+      "latestVersion": "TeleDrive v{{version}} 是最新版本。"
+    }
+  },
+  "encryption": {
+    "title": "零知識端對端加密 (E2EE)",
+    "description": "檔案在離開裝置前於本機使用 AES-256-GCM 加密，Telegram 頻道內無法檢視明文。",
+    "setupTitle": "設定加密密碼片語",
+    "setupHint": "TeleDrive 絕不會上傳或儲存您的密碼片語。請妥善備份，遺失將無法復原。",
+    "newPassphrasePlaceholder": "建立密碼片語（至少 6 個字元）",
+    "confirmPassphrasePlaceholder": "確認密碼片語",
+    "passphrasePlaceholder": "輸入加密密碼片語",
+    "encryptNewByDefault": "自動加密所有新上傳的檔案",
+    "rememberOnDevice": "在此裝置上安全記住金鑰",
+    "enableButton": "啟用加密",
+    "statusUnlocked": "加密保險庫已解鎖",
+    "statusLocked": "加密保險庫已鎖定",
+    "unlockedSubtitle": "預覽或下載加密檔案時會在本機透明解密。",
+    "lockedSubtitle": "輸入密碼片語以解鎖或上傳加密檔案。",
+    "lockButton": "鎖定保險庫",
+    "unlockButton": "解鎖",
+    "encryptNewTitle": "加密新上傳項目",
+    "encryptNewHelp": "新檔案將以 AES-256-GCM 封裝並使用匿名檔名上傳。",
+    "rememberTitle": "在此裝置上記住金鑰",
+    "rememberHelp": "開啟 TeleDrive 時自動解鎖您的加密保險庫。",
+    "on": "已開啟",
+    "off": "已關閉",
+    "disableButton": "清除本機加密設定",
+    "disableConfirm": "確認停用",
+    "unlockDialog": {
+      "title": "解鎖加密檔案",
+      "description": "輸入您的零知識 E2EE 密碼片語以於本機解密此檔案。"
+    },
+    "disableDialog": {
+      "title": "清除本機加密設定？",
+      "description": "Telegram 中已加密的檔案仍會維持加密狀態，開啟時會要求輸入原密碼片語。"
+    },
+    "errors": {
+      "tooShort": "密碼片語長度至少需為 6 個字元。",
+      "mismatch": "兩次輸入的密碼片語不相符。",
+      "wrongPassphrase": "密碼片語不正確，請重試。",
+      "setupFailed": "無法設定加密。",
+      "unlockFailed": "無法解鎖加密保險庫。"
+    },
+    "toasts": {
+      "enabled": "已為新上傳啟用零知識加密。",
+      "unlocked": "加密保險庫已解鎖。",
+      "locked": "加密保險庫已鎖定。",
+      "disabled": "已清除本機加密設定。"
+    }
+  },
+  "security": {
+    "title": "Security & App Lock",
+    "description": "Protect TeleDrive on this device when you step away.",
+    "enableLock": "Enable App Lock",
+    "enableLockDesc": "Require authentication whenever TeleDrive is opened or idle.",
+    "methodHeader": "Unlock Method",
+    "methods": {
+      "biometricTitle": "Device Password & Biometrics",
+      "biometricDesc": "Unlock using Touch ID, Face ID, Windows Hello, or your computer login password. No new password to memorize.",
+      "biometricRecommended": "Recommended",
+      "customTitle": "Custom TeleDrive Passcode",
+      "customDesc": "Set a dedicated 4–6 digit numeric PIN or alphanumeric password specifically for TeleDrive.",
+      "changePasscode": "Change Passcode"
+    },
+    "cadenceHeader": "Locking Cadence",
+    "cadence": {
+      "title": "Auto-Lock Timeout",
+      "desc": "Automatically lock after a period of inactivity.",
+      "immediate": "Immediately when minimized",
+      "1m": "After 1 minute of inactivity",
+      "5m": "After 5 minutes of inactivity (Recommended)",
+      "15m": "After 15 minutes of inactivity",
+      "1h": "After 1 hour of inactivity",
+      "never": "Never (Only manual lock)"
+    },
+    "options": {
+      "lockOnMinimize": "Lock on Minimize",
+      "lockOnMinimizeDesc": "Lock immediately when the application window is minimized or hidden.",
+      "privacyShield": "Window Privacy Shield",
+      "privacyShieldDesc": "Obfuscate content preview in Mission Control, Alt-Tab, and mobile recents."
+    },
+    "shortcutHint": "Tip: You can quickly lock TeleDrive at any time by pressing Cmd+L (macOS) or Ctrl+L (Windows/Linux).",
+    "toasts": {
+      "enabled": "App lock enabled!",
+      "disabled": "App lock disabled.",
+      "switchedBio": "Using device credentials & biometrics.",
+      "passcodeSaved": "App lock passcode updated successfully!"
+    },
+    "dialog": {
+      "setTitle": "Set App Lock Passcode",
+      "changeTitle": "Change Passcode",
+      "pinHint": "Enter a 4-to-6 digit numeric PIN.",
+      "passphraseHint": "Enter a master passphrase.",
+      "currentPass": "Current Passcode",
+      "newPass": "New Passcode",
+      "confirmPass": "Confirm New Passcode",
+      "cancel": "Cancel",
+      "save": "Save Passcode"
+    },
+    "errors": {
+      "wrongCurrentPass": "Current passcode is incorrect.",
+      "pinFormat": "PIN must be between 4 and 6 digits.",
+      "passphraseLength": "Passphrase must be at least 6 characters.",
+      "mismatch": "Passcodes do not match.",
+      "saveFailed": "Failed to save new passcode."
+    },
+    "lockScreen": {
+      "title": "TeleDrive is Locked",
+      "lockedBadge": "Locked",
+      "touchId": "Unlock with Touch ID",
+      "faceId": "Unlock with Face ID",
+      "windowsHello": "Unlock with Windows Hello",
+      "deviceCreds": "Unlock with Device Password",
+      "biometricHint": "Touch your fingerprint sensor or enter your device password.",
+      "enterPassphrase": "Enter master passphrase",
+      "unlockBtn": "Unlock",
+      "wrongPin": "Incorrect PIN. Please try again.",
+      "wrongPasscode": "Incorrect passcode. Please try again.",
+      "cooldown": "Too many failed attempts. Try again in {{seconds}}s.",
+      "forgot": "Forgot passcode?",
+      "forgotTitle": "Forgot Your Passcode?",
+      "forgotDescription": "To protect your privacy, TeleDrive cannot recover a forgotten passcode. Resetting it will sign you out of this device and remove the lock. All your files and backups remain completely safe and untouched in your Telegram cloud.",
+      "cancel": "Cancel",
+      "resetAndLogout": "Sign Out & Reset Lock"
+    }
+  },
+  "general": {
+    "title": "一般",
+    "description": "設定 TeleDrive 隨系統開機啟動及系統匣背景執行方式。",
+    "startup": {
+      "title": "開機啟動與系統匣",
+      "description": "獨立控制登入自動啟動與靜默系統匣啟動行為。",
+      "launchAtLogin": {
+        "title": "登入時自動啟動",
+        "description": "登入系統時自動啟動 TeleDrive，確保排程備份與資料夾同步持續運作。"
+      },
+      "startMinimized": {
+        "title": "啟動時最小化至系統匣",
+        "description": "啟動時不彈出主視窗搶佔焦點，直接隱藏於系統匣中安靜執行。"
+      }
+    },
+    "callout": "<strong>背景系統匣運作說明：</strong> 靜默啟動時，TeleDrive 會在系統匣中維持排程備份與同步任務執行。點擊系統匣圖示或再次開啟 TeleDrive 即可喚起主視窗。",
+    "toasts": {
+      "launchAtLoginEnabled": "已設定登入時自動啟動 TeleDrive。",
+      "launchAtLoginDisabled": "已從系統登入啟動項目中移除 TeleDrive。",
+      "launchAtLoginFailed": "無法更新登入自動啟動設定。",
+      "startMinimizedEnabled": "TeleDrive 將在啟動時直接最小化至系統匣。",
+      "startMinimizedDisabled": "TeleDrive 將在啟動時正常開啟主視窗。",
+      "startMinimizedFailed": "無法更新啟動視窗設定。"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "starPrompt": {
+    "title": "Menikmati TeleDrive? ✨",
+    "description": "Jika TeleDrive telah menghemat waktu atau biaya penyimpanan Anda, memberikan ⭐ di GitHub membantu lebih banyak orang menemukannya dan menjaga proyek tetap berjalan.",
+    "starButton": "⭐ Beri Bintang di GitHub",
+    "maybeLater": "Mungkin nanti",
+    "dontAskAgain": "Jangan tanya lagi"
+  },
+  "whatsNew": {
+    "title": "Apa yang Baru di TeleDrive",
+    "badge": "v{{version}}",
+    "features": [
+      "Keamanan Vault Multi-Akun — Kunci vault otomatis per akun dengan isolasi sesi & perangkat yang aman",
+      "Transfer Multi-Segmen >2/4 GB — Dukungan checkpoint lanjutkan, pemecahan otomatis & deduplikasi SHA-256",
+      "Startup Instan & Streaming 3× Pipeline — Cache IndexedDB, Katalog v3 & unduhan MTProto paralel",
+      "Pratinjau Universal & Thumbnail Grid — DOCX, ODT, RTF, EPUB, XLSX/ODS, PPTX/ODP, ZIP/TAR, HTML serta thumbnail PDF/video",
+      "Sinkronisasi Lintas Platform — Performa Tauri v2 lebih mulus dengan dukungan penuh 11 bahasa"
+    ],
+    "starCta": "Suka pembaruannya? Beri kami ⭐",
+    "starButton": "⭐ Beri Bintang di GitHub",
+    "close": "Tutup",
+    "subtitle": "Sorotan di TeleDrive v0.1.4"
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "common": {
+    "unknownError": "未知错误"
+  },
+  "bootstrap": {
+    "status": {
+      "connecting": "正在连接到电报...",
+      "verifyingChannel": "正在验证安全存储通道...",
+      "loadingIndex": "正在加载文件元数据索引...",
+      "recoveryScan": "正在验证您的文件（恢复扫描）...",
+      "initializingView": "正在初始化本地存储视图...",
+      "indexIncomplete": "无法验证云盘索引 — 更改已暂停。"
+    }
+  },
+  "backup": {
+    "errors": {
+      "noFolders": "首先在“设置”→“设备备份”中至少选择一个文件夹。",
+      "channelNotReady": "存储通道未准备好。请完成首次登录。",
+      "clientUnreachable": "Telegram 客户端无法访问：{{message}}",
+      "walkerFailed": "沃克失败：{{message}}",
+      "manifestCorrupt": "备份清单已损坏 - 在经过审核之前拒绝上传。",
+      "cancelled": "已被用户取消。",
+      "sessionExpired": "电报会话已过期。在“设置”→“电报帐户”中重新连接您的帐户，然后再次运行备份。",
+      "rateLimited": "Telegram 要求暂停上传约 {{minutes}} 分钟。剩余文件稍后将重试。"
+    }
+  },
+  "upload": {
+    "channelNotConfigured": "未配置 Telegram 存储通道。请检查设置。",
+    "success": "“{{name}}”上传成功！",
+    "indexSaveFailed": "“{{name}}”的索引保存失败 — 刷新驱动器。",
+    "failedFallback": "上传失败",
+    "failed": "无法上传“{{name}}”：{{message}}",
+    "emptyFile": "“{{name}}”为空。 Telegram 不支持空文件（0 字节）。",
+    "exceedsFreeLimit": "“{{name}}”超过了标准 Telegram 账号约 2 GB 的单文件上传上限（Telegram Premium 最高支持约 4 GB）。",
+    "exceedsPremiumLimit": "“{{name}}”超过了 Telegram 约 4 GB 的单文件上传上限。",
+    "duplicateSkipped": "此文件夹中已存在相同内容的“{{name}}”。"
+  },
+  "download": {
+    "cancelled": "下载已取消。",
+    "progress": "正在下载“{{name}}”... {{percent}}%",
+    "success": "“{{name}}”下载成功！",
+    "failed": "下载文件失败。请检查权限并重试。",
+    "errors": {
+      "mediaNotFound": "在 Telegram 上找不到目标文件消息或媒体。",
+      "mediaFailed": "无法下载媒体。"
+    },
+    "zipEmpty": "所选内容中没有可下载的文件。",
+    "zipSuccess": "已成功保存“{{name}}”！",
+    "zipFailed": "创建 ZIP 压缩包失败。"
+  },
+  "indexQueue": {
+    "rateLimitRetrying": "Telegram 速率限制 — 重试"
+  },
+  "storage": {
+    "saveFailed": "无法将文件保存到 {{path}}。请检查存储权限。"
+  },
+  "relativeTime": {
+    "unknown": "未知",
+    "justNow": "现在",
+    "second_one": "{{count}}秒",
+    "second_other": "{{count}} 秒",
+    "minute_one": "{{count}} 分钟",
+    "minute_other": "{{count}} 分钟",
+    "hour_one": "{{count}} 小时",
+    "hour_other": "{{count}} 小时",
+    "day_one": "{{count}}天",
+    "day_other": "{{count}} 天",
+    "month_one": "{{count}} 个月",
+    "month_other": "{{count}} 个月",
+    "year_one": "{{count}} 年",
+    "year_other": "{{count}}年"
+  },
+  "indexLoad": {
+    "bannerTitle": "云盘索引暂时不可用",
+    "bannerBodyCached": "正在显示本地缓存文件。索引将自动重新验证——上传已暂停，直到验证成功。",
+    "bannerBodyEmpty": "TeleDrive 无法访问或验证云盘索引。这通常是临时性网络问题，请点击重试。",
+    "retry": "重试",
+    "retrying": "正在重试...",
+    "changesPaused": "云盘索引尚未就绪。更改已暂停。",
+    "reason": {
+      "not_found": "无法从可用的频道消息中组装索引。",
+      "partial_manifest": "最新索引不完整——部分分块消息可能缺失。",
+      "timeout": "Telegram 响应超时，请检查您的网络连接。",
+      "network": "无法连接到存储频道，请检查您的网络连接。"
+    }
+  }
+}

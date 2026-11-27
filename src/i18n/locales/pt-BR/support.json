@@ -1,0 +1,24 @@
+{
+  "starPrompt": {
+    "title": "Aproveitando o TeleDrive? ✨",
+    "description": "Se o TeleDrive economizou seu tempo ou custos de armazenamento, deixar uma ⭐ no GitHub ajuda mais pessoas a descobri-lo e mantém o projeto ativo.",
+    "starButton": "⭐ Dar uma estrela no GitHub",
+    "maybeLater": "Talvez mais tarde",
+    "dontAskAgain": "Não perguntar novamente"
+  },
+  "whatsNew": {
+    "title": "Novidades no TeleDrive",
+    "badge": "v{{version}}",
+    "features": [
+      "Cofre Seguro Multiconta — Chaves automáticas isoladas por conta com proteção consistente de sessão e metadados",
+      "Transferências >2/4 GB retomáveis — Pontos de retomada, divisão automática em segmentos e deduplicação SHA-256",
+      "Inicialização instantânea e pipeline 3× — Cache IndexedDB, Catálogo v3 e downloads MTProto paralelos",
+      "Visualização universal e miniaturas — DOCX, ODT, RTF, EPUB, XLSX/ODS, PPTX/ODP, ZIP/TAR, HTML e miniaturas de PDF/vídeo",
+      "Sincronização multiplataforma refinada — Mais velocidade com Tauri v2 em todos os 11 idiomas"
+    ],
+    "starCta": "Gostou da atualização? Deixe uma ⭐",
+    "starButton": "⭐ Dar uma estrela no GitHub",
+    "close": "Fechar",
+    "subtitle": "Destaques do TeleDrive v0.1.4"
+  }
+}
